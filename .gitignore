@@ -1,0 +1,29 @@
+# This repository publishes only the server; the local Android client is private.
+/android/
+*.bundle
+
+# Local secrets, generated output and location/evidence stores
+.env*
+!.env.example
+*.jks
+*.keystore
+*.p12
+*.pfx
+*.pem
+*.key
+*.apk
+*.aab
+**/local.properties
+**/.gradle/
+**/.kotlin/
+**/.idea/
+**/build/
+/distribution/
+**/node_modules/
+server/data/
+/server/data-local/
+*.sqlite*
+*.db
+*.log
+.wrangler/
+.DS_Store

@@ -1,0 +1,7 @@
+**
+!server
+!server/package.json
+!server/src
+!server/src/**
+!LICENSE
+!NOTICE

@@ -1,0 +1,10 @@
+# Set DOMAIN to a public hostname with DNS pointing to this server.
+# Start: DOMAIN=safety.example.org docker compose --profile production up -d --build
+{$DOMAIN:localhost} {
+    reverse_proxy server:8080
+    header {
+        Strict-Transport-Security "max-age=31536000"
+        X-Content-Type-Options "nosniff"
+        -Server
+    }
+}

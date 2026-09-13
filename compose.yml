@@ -1,0 +1,44 @@
+services:
+  server:
+    build: .
+    restart: unless-stopped
+    environment:
+      HOST: 0.0.0.0
+      PORT: 8080
+      DATA_DIR: /data
+      # Listener is host-loopback only; use a trusted local Caddy or Tailscale proxy.
+      TRUST_PROXY: "true"
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-}
+      ANDROID_APK_PATH: /distribution/ansim-link.apk
+      ALLOW_INSECURE_INVITES: ${ALLOW_INSECURE_INVITES:-false}
+    volumes:
+      - safety-data:/data
+      - ./distribution:/distribution:ro
+    ports:
+      - "127.0.0.1:8080:8080"
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8080/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    security_opt:
+      - no-new-privileges:true
+    cap_drop: [ALL]
+  https:
+    image: caddy:2-alpine
+    profiles: [production]
+    restart: unless-stopped
+    environment:
+      DOMAIN: ${DOMAIN:-localhost}
+    ports: ["80:80", "443:443"]
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      server:
+        condition: service_healthy
+volumes:
+  safety-data:
+  caddy-data:
+  caddy-config:
