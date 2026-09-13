@@ -38,13 +38,15 @@ jobs:
           persist-credentials: false
       - name: Validate portable deployment configuration
         run: docker compose --env-file .env.example --profile production config --quiet
-      - name: Build runtime image
-        run: docker build -t ansim-link-ci .
+      - name: Build and wait for the deployed server to be healthy
+        run: docker compose --env-file .env.example --project-name ansim-link-ci up --detach --build --wait --wait-timeout 90 server
       - name: Exercise health and local first-device setup
         run: |
-          docker run --detach --name ansim-link-ci -e PUBLIC_BASE_URL=https://family.example.com -p 127.0.0.1:18080:8080 ansim-link-ci
-          curl --fail --retry 10 --retry-connrefused --retry-delay 1 http://127.0.0.1:18080/health
-          docker exec ansim-link-ci node src/bootstrap.mjs
+          curl --fail http://127.0.0.1:8080/health
+          docker compose --env-file .env.example --project-name ansim-link-ci exec -T server node src/bootstrap.mjs
+      - name: Show server logs on failure
+        if: failure()
+        run: docker compose --env-file .env.example --project-name ansim-link-ci logs --no-color server
       - name: Remove isolated runtime and data
         if: always()
-        run: docker rm --force --volumes ansim-link-ci
+        run: docker compose --env-file .env.example --project-name ansim-link-ci down --volumes --remove-orphans
