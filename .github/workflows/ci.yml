@@ -43,7 +43,8 @@ jobs:
           distribution: temurin
           java-version: '17'
       - name: Install Android SDK platform and AGP build tools
-        run: sdkmanager "platforms;android-35" "build-tools;34.0.0"
+        run: |
+          "${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager" "platforms;android-35" "build-tools;34.0.0"
       - name: Build keyless debug and unsigned release
         working-directory: android
         run: ./gradlew --no-daemon :app:assembleDebug :app:assembleRelease
