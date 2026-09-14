@@ -37,7 +37,7 @@ if (!/^\d+$/u.test(rawPort) || !Number.isInteger(port) || port < 1 || port > 655
       await stop();
     });
     app.server.listen(port, host, () => {
-      console.log(`안심연결 서버 준비 완료: ${host}:${port}`);
+      console.log(`어딧 서버 준비 완료: ${host}:${port}`);
       console.log('외부 서비스는 HTTPS 역방향 프록시 뒤에서 운영하세요. 긴급기관 자동 신고 기능은 없습니다.');
     });
   } catch {

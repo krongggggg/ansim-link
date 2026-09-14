@@ -24,8 +24,8 @@ ${apkAvailable ? `<a class="button" href="${escapeHtml(publicBaseUrl)}/downloads
 <p class="detail">연결할 서버: ${escapeHtml(publicBaseUrl)}<br>Tailscale 주소라면 가족 폰도 Tailscale에 연결되어 있어야 합니다.</p>
 <p class="detail">개인 초대 링크이므로 공개 게시하지 마세요. 사용되었거나 새 QR이 만들어지면 이전 초대는 무효가 됩니다. 초대 상태는 앱에서 연결하기 전에 다시 확인합니다.</p>`;
   } else {
-    content = `<p class="notice">${escapeHtml(error?.message ?? '초대가 없거나 만료되었거나 이미 사용되었습니다. 초대한 가족이나 서버 운영자에게 새 초대를 요청해 주세요.')}</p><p>이 페이지를 여는 것만으로 가족 연결이나 위치 공유가 이루어지지 않습니다.</p><p class="detail">안심연결 앱은 현재 Android만 지원합니다. iPhone에서는 설치할 수 없습니다.</p>`;
+    content = `<p class="notice">${escapeHtml(error?.message ?? '초대가 없거나 만료되었거나 이미 사용되었습니다. 초대한 가족이나 서버 운영자에게 새 초대를 요청해 주세요.')}</p><p>이 페이지를 여는 것만으로 가족 연결이나 위치 공유가 이루어지지 않습니다.</p><p class="detail">어딧 앱은 현재 Android만 지원합니다. iPhone에서는 설치할 수 없습니다.</p>`;
   }
   return `<!doctype html>
-<html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="referrer" content="no-referrer"><meta name="robots" content="noindex,nofollow"><title>${escapeHtml(title)} · 안심연결</title><style>${style}</style></head><body><main><div class="brand">안심연결</div><h1>${escapeHtml(title)}</h1>${content}</main></body></html>`;
+<html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="referrer" content="no-referrer"><meta name="robots" content="noindex,nofollow"><title>${escapeHtml(title)} · 어딧</title><style>${style}</style></head><body><main><div class="brand">어딧</div><h1>${escapeHtml(title)}</h1>${content}</main></body></html>`;
 }
