@@ -48,7 +48,7 @@ private enum class HomePage { Map, Family, History, Safety, Alerts, Settings }
     state: JSONObject?, busy: Boolean, revokePending: Boolean, collecting: Boolean,
     onRefresh: () -> Unit, onShare: (Boolean) -> Unit, onMutation: (String, String, JSONObject?) -> Unit,
     onInvite: ((JSONObject) -> Unit) -> Unit, onHistory: suspend (String) -> List<JSONObject>,
-    onAcceptInvite: (String, () -> Unit) -> Unit,
+    onAcceptInvite: (String, () -> Unit) -> Unit, onScanInvitation: () -> Unit,
     onDelete: (String) -> Unit, monitoring: Boolean, onMonitoring: (Boolean) -> Unit, serverUrl: String
 ) {
     var page by rememberSaveable { mutableStateOf(HomePage.Map) }
@@ -102,7 +102,7 @@ private enum class HomePage { Map, Family, History, Safety, Alerts, Settings }
             onEnableSharing = { shareConfirm = true },
             onRecenter = { recenterRequest++ }
         )
-        HomePage.Family -> FamilyScreen(state, busy, onInvite, onAcceptInvite, onMutation, choose, back)
+        HomePage.Family -> FamilyScreen(state, busy, onInvite, onAcceptInvite, onScanInvitation, onMutation, choose, back)
         HomePage.History -> {
             val person = if (historyId == meId) me else members.find { it.optString("id") == historyId }
             HistoryScreen(historyId, person?.optString("name") ?: "연결 해제된 가족", person != null && (if (historyId == meId) sharing else person.optBoolean("sharing")), onHistory, back)
@@ -156,7 +156,7 @@ private enum class HomePage { Map, Family, History, Safety, Alerts, Settings }
     )
     if (shareConfirm) AlertDialog(
         onDismissRequest = { shareConfirm = false }, icon = { Icon(Icons.Rounded.LocationOn, null) }, title = { Text("내 위치를 공유할까요?") },
-        text = { Text("연결된 가족이 현재 위치와 최근 7일 이동 기록을 볼 수 있습니다. 앱을 벗어나도 알림을 표시하며 위치를 수집합니다. 공유를 끄면 서버의 위치 기록이 삭제됩니다.\n\n기기 설정에 따라 위치 수집이 중단될 수 있습니다.") },
+        text = { Text("연결된 가족이 현재 위치와 최근 7일 이동 기록을 볼 수 있습니다. 앱을 벗어나도 알림을 표시하며 위치를 수집합니다. 공유를 켠 채 업데이트한 뒤 앱을 열면 기존 동의에 따라 수집을 다시 시작합니다. 공유를 끄면 서버의 위치 기록이 삭제됩니다.\n\n기기 설정에 따라 위치 수집이 중단될 수 있습니다.") },
         confirmButton = { TextButton({ shareConfirm = false; onShare(true) }, enabled = !busy) { Text("동의하고 공유") } },
         dismissButton = { TextButton({ shareConfirm = false }) { Text("취소") } }
     )

@@ -9,6 +9,8 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
+import com.journeyapps.barcodescanner.ScanContract
+import com.journeyapps.barcodescanner.ScanOptions
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
@@ -67,6 +69,9 @@ class MainActivity : ComponentActivity() {
     private var invitationError by mutableStateOf<String?>(null)
     private val snackbar = SnackbarHostState()
     private var permissionAction = ""
+    private val invitationScanner = registerForActivityResult(ScanContract()) { result ->
+        result.contents?.let(::enterScannedInvitation)
+    }
     private val notificationPermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) { allowed ->
         if (!allowed) notice("알림이 차단되어 있습니다. 앱의 알림함에서 직접 확인하거나 시스템 설정에서 허용해 주세요.")
     }
@@ -96,12 +101,13 @@ class MainActivity : ComponentActivity() {
                         Box(Modifier.padding(padding).consumeWindowInsets(padding)) {
                             val invitation = pendingInvitation
                             if (!hasSession && invitation == null) {
-                                InvitationLandingScreen(busy, store.baseUrl, ::enterInvitation)
+                                InvitationLandingScreen(busy, store.baseUrl, ::scanInvitation, ::enterInvitation)
                             } else if (hasSession && invitation == null) HomeScreen(state, busy, revokePending, SafetyService.running,
                                 onRefresh = { act { refresh() } },
                                 onShare = ::changeSharing,
                                 onMutation = { method, path, body -> act { api.request(method, path, body); refresh() } },
                                 onInvite = { result -> act { result(api.request("POST", "/api/invites", json())); refresh() } },
+                                onScanInvitation = ::scanInvitation,
                                 onAcceptInvite = { code, accepted -> act {
                                     api.request("POST", "/api/invites/accept", json("code" to code))
                                     refresh()
@@ -152,10 +158,7 @@ class MainActivity : ComponentActivity() {
         if (incoming.action != Intent.ACTION_VIEW) return
         val raw = incoming.dataString ?: return
         try {
-            val invitation = IncomingInvitation.parse(raw)
-            store.saveInvitation(invitation)
-            pendingInvitation = invitation
-            invitationError = null
+            saveInvitation(IncomingInvitation.parse(raw))
         } catch (_: Exception) {
             notice("초대 링크 형식이 올바르지 않습니다. 기존 계정과 대기 중인 초대는 유지됩니다. 가족에게 새 링크를 요청해 주세요.")
         } finally {
@@ -163,13 +166,37 @@ class MainActivity : ComponentActivity() {
             incoming.data = null
         }
     }
+
+    private fun scanInvitation() {
+        if (busy || pendingInvitation != null) return
+        invitationScanner.launch(
+            ScanOptions()
+                .setDesiredBarcodeFormats(ScanOptions.QR_CODE)
+                .setPrompt("어딧 가족 초대 QR을 비춰 주세요")
+                .setBeepEnabled(false)
+                .setBarcodeImageEnabled(false)
+                .setOrientationLocked(false),
+        )
+    }
+
+    private fun enterScannedInvitation(value: String) {
+        try {
+            saveInvitation(IncomingInvitation.parse(value))
+        } catch (_: Exception) {
+            notice("어딧 가족 초대 QR이 아닙니다. 가족이 만든 원래 QR을 다시 비춰 주세요.")
+        }
+    }
+
+    private fun saveInvitation(invitation: IncomingInvitation) {
+        store.saveInvitation(invitation)
+        pendingInvitation = invitation
+        invitationError = null
+    }
+
     private fun enterInvitation(link: String, server: String, code: String) {
         if (busy || hasSession) return
         try {
-            val invitation = if (link.isNotBlank()) IncomingInvitation.parse(link) else IncomingInvitation.manual(server, code)
-            store.saveInvitation(invitation)
-            pendingInvitation = invitation
-            invitationError = null
+            saveInvitation(if (link.isNotBlank()) IncomingInvitation.parse(link) else IncomingInvitation.manual(server, code))
         } catch (e: Exception) { notice(invitationErrorText(e)) }
     }
 
@@ -262,9 +289,15 @@ class MainActivity : ComponentActivity() {
         catch (e: ApiException) { if (expireInvalidSession && e.status == 401 && hasSession) expireSession(); throw e }
         state = result
         revokePending = store.revokePending
-        if (!result.getJSONObject("me").optBoolean("sharing") && store.sharingEnabled) {
+        val me = result.getJSONObject("me")
+        val sharing = me.optBoolean("sharing")
+        if (!sharing && store.sharingEnabled) {
             store.sharingEnabled = false
             stopService(Intent(this, SafetyService::class.java))
+        } else if (sharing && me.optString("id") == store.userId &&
+            store.sharingEnabled && !SafetyService.running && hasLocation() &&
+            lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) {
+            SafetyService.start(this)
         }
     }
     private fun joinInvitation(invitation: IncomingInvitation, name: String) {
@@ -337,7 +370,7 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-@Composable private fun InvitationLandingScreen(busy: Boolean, initialUrl: String, submit: (String, String, String) -> Unit) {
+@Composable private fun InvitationLandingScreen(busy: Boolean, initialUrl: String, scan: () -> Unit, submit: (String, String, String) -> Unit) {
     var link by rememberSaveable { mutableStateOf("") }
     var manual by rememberSaveable { mutableStateOf(false) }
     var base by rememberSaveable { mutableStateOf(initialUrl) }
@@ -350,6 +383,14 @@ class MainActivity : ComponentActivity() {
         Text("가족이 보낸 초대로 시작하세요.\n이름만 정하면 이 기기를 연결할 수 있어요.", color = Muted, lineHeight = 23.sp)
         SafetyCard {
             Text("받은 가족 초대 열기", fontSize = 19.sp, fontWeight = FontWeight.Bold)
+            Button(scan, enabled = !busy, modifier = Modifier.fillMaxWidth().height(52.dp), shape = RoundedCornerShape(14.dp)) {
+                Icon(Icons.Rounded.QrCodeScanner, null)
+                Spacer(Modifier.width(10.dp))
+                Text("초대 QR 스캔")
+            }
+            Text("설치 뒤에도 같은 QR을 비추면 코드를 다시 입력하지 않고 초대를 확인할 수 있어요.", color = Muted, fontSize = 12.sp, lineHeight = 19.sp)
+            HorizontalDivider()
+            Text("초대 정보를 직접 받은 경우", color = Muted, fontSize = 12.sp)
             if (manual) {
                 OutlinedTextField(base, { base = it }, enabled = !busy, label = { Text("초대한 가족의 서버 주소") }, singleLine = true, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri), modifier = Modifier.fillMaxWidth())
                 OutlinedTextField(code, { code = it }, enabled = !busy, label = { Text("16자리 초대 코드") }, singleLine = true, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Ascii), modifier = Modifier.fillMaxWidth())
@@ -358,13 +399,13 @@ class MainActivity : ComponentActivity() {
                 OutlinedTextField(link, { link = it }, enabled = !busy, label = { Text("초대 링크 붙여넣기") }, placeholder = { Text("https://family.example.com/invite/…") }, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri), modifier = Modifier.fillMaxWidth())
                 Text("가족이 보낸 HTTPS 링크 또는 ansimlink:// 초대 링크를 입력해 주세요.", color = Muted, fontSize = 12.sp)
             }
-            Button({ submit(if (manual) "" else link, base, code) }, enabled = !busy && (if (manual) base.isNotBlank() && IncomingInvitation.validCode(code.trim()) else link.isNotBlank()), modifier = Modifier.fillMaxWidth().height(52.dp), shape = RoundedCornerShape(14.dp)) {
+            OutlinedButton({ submit(if (manual) "" else link, base, code) }, enabled = !busy && (if (manual) base.isNotBlank() && IncomingInvitation.validCode(code.trim()) else link.isNotBlank()), modifier = Modifier.fillMaxWidth().height(52.dp), shape = RoundedCornerShape(14.dp)) {
                 Text("초대 확인하기"); Spacer(Modifier.width(10.dp)); Icon(Icons.AutoMirrored.Rounded.ArrowForward, null, modifier = Modifier.size(18.dp))
             }
             TextButton({ manual = !manual }, enabled = !busy, modifier = Modifier.align(Alignment.CenterHorizontally)) { Text(if (manual) "초대 링크로 입력하기" else "서버 주소와 코드로 입력하기") }
         }
         InfoStrip("다음 화면에서 초대한 가족과 서버를 확인한 뒤 직접 연결합니다. 위치 공유는 별도로 동의하기 전까지 꺼져 있습니다.", Violet)
-        Text("가족의 첫 기기는 서버 운영자에게 첫 기기용 초대를 요청하세요. 앱을 재설치하거나 데이터를 지우면 새 초대가 필요하며, 이전 프로필은 자동 복구되지 않습니다.", color = Muted, fontSize = 12.sp, lineHeight = 19.sp)
+        Text("가족의 첫 기기는 서버 운영자에게 첫 기기용 초대를 요청하세요. 앱을 삭제한 뒤 재설치하거나 데이터를 지우면 새 초대가 필요하며, 이전 프로필은 자동 복구되지 않습니다.", color = Muted, fontSize = 12.sp, lineHeight = 19.sp)
         Text("위급할 때는 112 · 119\n어딧은 긴급 구조기관에 신고하지 않습니다.", color = Muted, fontSize = 12.sp, lineHeight = 19.sp)
     }
 }

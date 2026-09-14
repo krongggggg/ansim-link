@@ -77,7 +77,7 @@ internal fun SettingsScreen(me: JSONObject?, busy: Boolean, monitoring: Boolean,
         SettingsSectionTitle("데이터 관리")
         SettingsRow(Icons.Rounded.PrivacyTip, "보관과 삭제", "위치 기록 7일 · 공유를 끄면 위치 기록 삭제") { detail = SettingsDetail.Data }
         HorizontalDivider(color = Muted.copy(alpha = 0.12f))
-        SettingsRow(Icons.Rounded.PhonelinkErase, "재설치·데이터 초기화 안내", "다시 연결하려면 새 초대가 필요해요") { detail = SettingsDetail.Reinstall }
+        SettingsRow(Icons.Rounded.PhonelinkErase, "업데이트·재설치 안내", "업데이트는 유지 · 삭제하면 새 초대 필요") { detail = SettingsDetail.Reinstall }
     }
 
     SafetyCard {
@@ -150,8 +150,9 @@ internal fun SettingsScreen(me: JSONObject?, busy: Boolean, monitoring: Boolean,
             SettingsParagraph("프로필 삭제", "내 프로필과 연결된 자료를 서버에서 영구 삭제하고 이 기기의 연결을 종료합니다. 앱만 삭제하면 서버 데이터는 삭제되지 않습니다.")
             SettingsParagraph("서버 백업의 범위", "위 보관·삭제 기준은 운영 중인 서버 데이터에 적용됩니다. 운영자가 별도로 만든 백업 사본은 앱에서 삭제하지 않습니다. 백업에 포함되는 자료, 보관 기간과 삭제 방법은 서버 운영자에게 확인해 주세요.")
         }
-        SettingsDetail.Reinstall -> SettingsInfoDialog("재설치·데이터 초기화", { detail = null }) {
-            SettingsParagraph("새 초대가 필요해요", "앱을 재설치하거나 앱 데이터를 지우면 이 기기의 연결 정보도 사라집니다. 다시 사용하려면 새 초대가 필요하며, 이전 프로필은 자동 복구되지 않습니다.")
+        SettingsDetail.Reinstall -> SettingsInfoDialog("업데이트·재설치", { detail = null }) {
+            SettingsParagraph("덮어쓰기 업데이트는 유지돼요", "같은 서명의 앱을 삭제하지 않고 업데이트하면 연결 정보와 공유 설정을 유지합니다. 업데이트 후 앱을 열면, 이전에 켜 둔 공유가 서버에서도 켜져 있고 위치 권한이 있을 때 수집을 다시 시작합니다. 꺼 둔 공유나 해제 확인 중인 공유는 다시 켜지지 않습니다.")
+            SettingsParagraph("삭제 후 재설치는 새 초대가 필요해요", "앱을 삭제한 뒤 재설치하거나 앱 데이터를 지우면 이 기기의 연결 정보도 사라집니다. 다시 사용하려면 새 초대가 필요하며, 이전 프로필은 자동 복구되지 않습니다.")
             SettingsParagraph("앱 삭제와 프로필 삭제는 달라요", "앱을 삭제하거나 데이터를 초기화하는 것만으로 서버의 프로필과 자료가 삭제되지는 않습니다. 내 서버 자료를 지우려면 연결된 상태에서 ‘내 프로필 삭제’를 이용하세요.")
         }
         SettingsDetail.App -> SettingsInfoDialog("어딧 정보", { detail = null }) {
@@ -169,7 +170,7 @@ internal fun SettingsScreen(me: JSONObject?, busy: Boolean, monitoring: Boolean,
             text = {
                 Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     Text("가족 연결과 위치 기록을 포함해 내 프로필에 저장된 자료를 영구 삭제하고 이 기기의 연결을 종료합니다. 되돌릴 수 없습니다.")
-                    Text("다시 사용하려면 새 초대가 필요합니다. 앱 재설치·데이터 초기화 후에도 새 초대가 필요하며, 이전 프로필은 자동 복구되지 않습니다.", color = Muted, fontSize = 13.sp, lineHeight = 21.sp)
+                    Text("다시 사용하려면 새 초대가 필요합니다. 앱 삭제 후 재설치·데이터 초기화 후에도 새 초대가 필요하며, 이전 프로필은 자동 복구되지 않습니다.", color = Muted, fontSize = 13.sp, lineHeight = 21.sp)
                     Text("삭제하려면 현재 표시 이름 ‘$currentName’을 정확히 입력해 주세요.")
                     OutlinedTextField(confirmName, { confirmName = it }, enabled = canMutate, label = { Text("현재 표시 이름") }, singleLine = true, modifier = Modifier.fillMaxWidth())
                 }

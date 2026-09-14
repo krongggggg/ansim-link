@@ -73,6 +73,7 @@ internal fun FamilyScreen(
     busy: Boolean,
     onInvite: ((JSONObject) -> Unit) -> Unit,
     acceptInvite: (String, () -> Unit) -> Unit,
+    scanInvitation: () -> Unit,
     mutate: (String, String, JSONObject?) -> Unit,
     onMember: (String) -> Unit,
     onBack: () -> Unit,
@@ -103,7 +104,7 @@ internal fun FamilyScreen(
             title = when (page) {
                 FamilyPage.Landing -> "우리 가족"
                 FamilyPage.Invite -> "가족 초대하기"
-                FamilyPage.Join -> "코드로 연결하기"
+                FamilyPage.Join -> "받은 초대로 연결하기"
             },
             onBack = back,
         )
@@ -126,7 +127,7 @@ internal fun FamilyScreen(
                 }
                 item {
                     FamilyEntry(
-                        "코드로 연결하기", "가족에게 받은 초대 코드를 입력해요", Icons.Rounded.Link,
+                        "받은 초대로 연결하기", "QR을 스캔하거나 코드를 입력해요", Icons.Rounded.QrCodeScanner,
                         enabled = state != null,
                     ) { page = FamilyPage.Join }
                 }
@@ -134,7 +135,7 @@ internal fun FamilyScreen(
                 if (state == null) {
                     item { InfoStrip("가족 정보를 불러오는 중입니다. 아직 연결 상태를 확인할 수 없어요.", Muted) }
                 } else if (members.isEmpty()) {
-                    item { EmptyCard(Icons.Rounded.PeopleOutline, "아직 연결된 가족이 없어요", "초대 코드를 보내거나 받은 코드로 연결해 보세요.") }
+                    item { EmptyCard(Icons.Rounded.PeopleOutline, "아직 연결된 가족이 없어요", "초대 QR을 스캔하거나 코드를 주고받아 연결해 보세요.") }
                 }
                 items(members, key = { it.optString("id") }) { member ->
                     val memberId = member.optString("id")
@@ -179,8 +180,21 @@ internal fun FamilyScreen(
                 Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(20.dp),
                 verticalArrangement = Arrangement.spacedBy(18.dp),
             ) {
-                Text("받은 코드로 가족과 연결해요", fontSize = 23.sp, fontWeight = FontWeight.Bold, color = Ink)
-                Text("초대한 가족과 같은 서버에 연결되어 있는지 확인해 주세요. 코드는 만든 뒤 10분 동안 한 번만 사용할 수 있어요.", color = Muted, lineHeight = 23.sp)
+                Text("받은 초대로 가족과 연결해요", fontSize = 23.sp, fontWeight = FontWeight.Bold, color = Ink)
+                Text("초대한 가족과 같은 서버에 연결되어 있는지 확인해 주세요. 초대는 만든 뒤 10분 동안 한 번만 사용할 수 있어요.", color = Muted, lineHeight = 23.sp)
+                Button(
+                    onClick = scanInvitation,
+                    enabled = !busy,
+                    modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp),
+                    shape = RoundedCornerShape(14.dp),
+                ) {
+                    Icon(Icons.Rounded.QrCodeScanner, null)
+                    Spacer(Modifier.width(8.dp))
+                    Text("초대 QR 스캔")
+                }
+                Text("QR을 비추면 코드 입력 없이 초대한 가족과 서버를 확인하는 화면으로 이동합니다.", color = Muted, fontSize = 12.sp, lineHeight = 19.sp)
+                HorizontalDivider()
+                Text("코드를 직접 받은 경우", color = Muted, fontSize = 12.sp)
                 SafetyCard {
                     OutlinedTextField(
                         value = code,
@@ -201,9 +215,9 @@ internal fun FamilyScreen(
                     Button(
                         onClick = {
                             focusManager.clearFocus()
-                            acceptInvite(code) { code = ""; page = FamilyPage.Landing }
+                            acceptInvite(code.trim()) { code = ""; page = FamilyPage.Landing }
                         },
-                        enabled = !busy && state != null && code.isNotBlank(),
+                        enabled = !busy && state != null && IncomingInvitation.validCode(code.trim()),
                         modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp),
                         shape = RoundedCornerShape(14.dp),
                     ) { Text(if (busy) "처리 중…" else "동의하고 가족 연결") }
@@ -299,7 +313,7 @@ private fun InviteFlow(code: String, expiresAt: String, inviteUrl: String, apkAv
         verticalArrangement = Arrangement.spacedBy(18.dp),
     ) {
         Text("QR로 가족을 초대해요", fontSize = 23.sp, fontWeight = FontWeight.Bold, color = Ink)
-        Text("가족 폰의 기본 카메라로 스캔하면 설치 안내가 열려요. 설치 후 초대 페이지에서 앱을 열고 이름을 정한 뒤 직접 연결해 주세요.", color = Muted, lineHeight = 23.sp)
+        Text("가족 폰에 앱이 있으면 어딧의 ‘초대 QR 스캔’으로 바로 초대를 확인할 수 있어요. 앱이 없으면 기본 카메라로 설치 안내를 여세요.", color = Muted, lineHeight = 23.sp)
         SafetyCard {
             if (code.isBlank()) {
                 Icon(Icons.Rounded.QrCode2, null, tint = Violet, modifier = Modifier.size(36.dp))
@@ -309,12 +323,13 @@ private fun InviteFlow(code: String, expiresAt: String, inviteUrl: String, apkAv
                 if (expired) {
                     InfoStrip("초대가 만료되었어요. 아래에서 새 QR을 만들어 주세요.", Danger)
                 } else {
-                    if (hasLink && apkAvailable) {
+                    if (hasLink) {
                         Text("이 QR을 가족 폰으로 비춰 주세요", fontWeight = FontWeight.Bold, fontSize = 18.sp)
                         InvitationQr(inviteUrl)
-                        Text("Android 설치 → 이 초대 페이지로 돌아오기 → 앱에서 이름 입력·연결", color = Muted, fontSize = 13.sp, lineHeight = 20.sp)
+                        Text(if (apkAvailable) "앱 있음: 어딧에서 QR 스캔 · 앱 없음: 기본 카메라로 설치 후 같은 QR 다시 스캔" else "설치된 어딧 앱의 ‘초대 QR 스캔’으로 비춰 주세요.", color = Muted, fontSize = 13.sp, lineHeight = 20.sp)
+                        if (!apkAvailable) InfoStrip("이 서버는 Android 설치 파일을 제공하지 않습니다. 앱이 없는 가족에게는 신뢰할 수 있는 별도 설치 경로를 안내해 주세요.", Muted)
                     } else {
-                        InfoStrip("QR 설치 초대를 제공하려면 서버에 접속 주소와 Android 설치 파일을 설정해야 합니다. 이미 앱이 있는 가족은 같은 서버에서 아래 코드를 입력할 수 있어요.", Muted)
+                        InfoStrip("QR 초대를 제공하려면 서버에 공개 접속 주소를 설정해야 합니다. 같은 서버에 연결된 가족은 아래 코드를 직접 입력할 수 있어요.", Muted)
                     }
                     Text("만료 ${whenText(expiresAt)} · 한 사람만 사용 가능", color = Muted, fontSize = 13.sp)
                     if (hasLink) {
@@ -340,8 +355,8 @@ private fun InviteFlow(code: String, expiresAt: String, inviteUrl: String, apkAv
                             if (expiry?.isAfter(Instant.now()) == true) {
                                 val share = Intent(Intent.ACTION_SEND).apply {
                                     type = "text/plain"
-                                    putExtra(Intent.EXTRA_TEXT, if (hasLink) "어딧 가족 초대입니다.\n$inviteUrl\n만료: ${whenText(expiresAt)} (한 사람만 사용 가능)\n설치 후 이 페이지로 돌아와 앱에서 초대를 열어 주세요. Tailscale 주소라면 가족 폰도 Tailscale 연결이 필요합니다. 위치 공유는 자동으로 켜지지 않습니다."
-                                        else "어딧 초대 코드: $code\n만료: ${whenText(expiresAt)} (한 사람만 사용 가능)\n초대한 가족의 서버 주소와 함께 입력해 주세요. 이미 같은 서버에 연결된 기기는 ‘코드로 연결하기’를 이용해 주세요.")
+                                    putExtra(Intent.EXTRA_TEXT, if (hasLink) "어딧 가족 초대입니다.\n$inviteUrl\n만료: ${whenText(expiresAt)} (한 사람만 사용 가능)\n앱이 있으면 어딧의 ‘초대 QR 스캔’으로 링크의 QR을 비추거나 이 링크를 여세요. 앱이 없으면 설치 후 같은 QR을 다시 스캔할 수 있습니다. Tailscale 주소라면 가족 폰도 Tailscale 연결이 필요합니다. 위치 공유는 자동으로 켜지지 않습니다."
+                                        else "어딧 초대 코드: $code\n만료: ${whenText(expiresAt)} (한 사람만 사용 가능)\n초대한 가족의 서버 주소와 함께 입력해 주세요. 이미 같은 서버에 연결된 기기는 ‘받은 초대로 연결하기’를 이용해 주세요.")
                                 }
                                 try { context.startActivity(Intent.createChooser(share, "가족 초대 전달")) }
                                 catch (_: ActivityNotFoundException) { feedback = "공유할 앱이 없어요. 초대 링크나 코드를 복사해 주세요." }

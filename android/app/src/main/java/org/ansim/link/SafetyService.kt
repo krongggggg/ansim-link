@@ -165,7 +165,7 @@ class SafetyService : Service(), LocationListener, SharedPreferences.OnSharedPre
         latest = null
         LocationTransmission.cancel()
         scope.cancel()
-        if (store.sharingEnabled) store.markRevokePending()
+        // Update/process teardown is not withdrawal of the saved sharing consent.
         stopForeground(STOP_FOREGROUND_REMOVE)
         super.onDestroy()
     }

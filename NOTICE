@@ -21,9 +21,9 @@ Kotlin 2.0.21 and kotlinx.coroutines 1.9.0: JetBrains and respective contributor
 https://github.com/JetBrains/kotlin/blob/v2.0.21/license/LICENSE.txt
 https://github.com/Kotlin/kotlinx.coroutines/blob/1.9.0/LICENSE.txt
 
-ZXing core 3.5.3 (QR generation): ZXing authors, Apache License 2.0. The app uses the core artifact, not the separate Java SE image I/O components.
+ZXing core 3.5.3 (QR 생성·해석)과 ZXing Android Embedded 4.3.0 (기기 카메라 QR 스캔): ZXing authors, Journey Mobile 및 respective contributors, Apache License 2.0. Android Embedded가 선언하는 ZXing core 3.4.1보다 앱의 명시적 3.5.3 의존성이 우선합니다. Java SE 이미지 I/O 구성요소는 사용하지 않습니다.
 https://github.com/zxing/zxing/tree/zxing-3.5.3/core
-https://github.com/zxing/zxing/blob/zxing-3.5.3/LICENSE
+https://github.com/journeyapps/zxing-android-embedded/tree/v4.3.0
 
 실제 APK를 재배포할 때는 직접·전이 의존성의 해당 버전에서 LICENSE·NOTICE·저작권 고지를 수집해 배포물에 포함하고 수정한 제3자 파일은 변경 사실을 표시해야 합니다. 앱의 간략한 라이선스 화면이나 이 목록만으로 모든 바이너리 의존성의 재배포 의무가 끝나지는 않습니다. 이 목록은 SDK 내부 구성요소까지 망라한 SBOM이 아닙니다.
 

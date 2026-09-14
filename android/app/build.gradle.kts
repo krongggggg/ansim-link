@@ -22,8 +22,8 @@ android {
         applicationId = "org.ansim.link"
         minSdk = 26
         targetSdk = 35
-        versionCode = 2
-        versionName = "1.1.0"
+        versionCode = 4
+        versionName = "1.2.0"
         manifestPlaceholders["naverMapKeyId"] = naverMapKeyId
         buildConfigField("boolean", "NAVER_MAP_CONFIGURED", naverMapKeyId.isNotEmpty().toString())
     }
@@ -46,4 +46,5 @@ dependencies {
     implementation("androidx.work:work-runtime-ktx:2.10.0")
     implementation("com.naver.maps:map-sdk:3.24.0")
     implementation("com.google.zxing:core:3.5.3")
+    implementation("com.journeyapps:zxing-android-embedded:4.3.0")
 }
