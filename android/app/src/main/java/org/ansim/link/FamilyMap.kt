@@ -91,8 +91,14 @@ internal class FamilyMapState {
 }
 
 @Composable
-internal fun rememberFamilyMapState(): FamilyMapState =
-    rememberSaveable(saver = FamilyMapState.StateSaver) { FamilyMapState() }
+internal fun rememberFamilyMapState(initial: JSONObject? = null, initialZoom: Double = 14.0): FamilyMapState {
+    val coordinate = initial?.mapCoordinate()
+    return rememberSaveable(coordinate?.latitude, coordinate?.longitude, initialZoom, saver = FamilyMapState.StateSaver) {
+        FamilyMapState().apply {
+            if (coordinate != null) camera = CameraPosition(coordinate, initialZoom)
+        }
+    }
+}
 
 // The SDK has one process-wide callback. A map leaving composition must not
 // remove another map's callback or restore a callback belonging to a dead view.
@@ -146,7 +152,10 @@ internal fun FamilyMap(
     onSelect: (String) -> Unit = {},
     bottomPadding: Dp = 0.dp,
     historyMode: Boolean = false,
-    topPadding: Dp = 0.dp
+    topPadding: Dp = 0.dp,
+    pickerMode: Boolean = false,
+    pickerRadius: Double = 150.0,
+    onPickerCenter: (Double, Double) -> Unit = { _, _ -> },
 ) {
     if (!BuildConfig.NAVER_MAP_CONFIGURED) {
         Box(modifier.padding(top = topPadding, bottom = bottomPadding), contentAlignment = Alignment.Center) {
@@ -176,8 +185,17 @@ internal fun FamilyMap(
     var controller by remember(view) { mutableStateOf<NaverMap?>(null) }
     var authError by remember(view) { mutableStateOf<String?>(null) }
     val selectPerson by rememberUpdatedState(onSelect)
+    val pickerEnabled by rememberUpdatedState(pickerMode)
+    val pickerCenterChanged by rememberUpdatedState(onPickerCenter)
     val markers = remember(view) { mutableMapOf<String, Marker>() }
     val circles = remember(view) { mutableMapOf<String, CircleOverlay>() }
+    val pickerCircle = remember(view) {
+        CircleOverlay().apply {
+            color = Violet.copy(alpha = 0.16f).toArgb()
+            outlineColor = Violet.toArgb()
+            outlineWidth = context.resources.displayMetrics.density.toInt().coerceAtLeast(1)
+        }
+    }
     val path = remember(view) {
         PolylineOverlay().apply {
             color = Violet.toArgb()
@@ -222,13 +240,22 @@ internal fun FamilyMap(
         mapState.owner = view
         val sdk = NaverMapSdk.getInstance(context)
         val cameraChanged = NaverMap.OnCameraChangeListener { reason, _ ->
+            val map = nativeMap
+            if (pickerEnabled && map != null) pickerCircle.center = map.cameraPosition.target
             if (mapState.owner === view && (reason == CameraUpdate.REASON_GESTURE || reason == CameraUpdate.REASON_CONTROL)) {
                 // A gesture also cancels a pending first fix: polling must never undo it.
                 mapState.focusPending = false
             }
         }
         val cameraIdle = NaverMap.OnCameraIdleListener {
-            if (mapState.owner === view) nativeMap?.let { mapState.camera = it.cameraPosition }
+            if (mapState.owner === view) nativeMap?.let { map ->
+                mapState.camera = map.cameraPosition
+                if (pickerEnabled) {
+                    val center = map.cameraPosition.target
+                    pickerCircle.center = center
+                    pickerCenterChanged(center.latitude, center.longitude)
+                }
+            }
         }
         val authListener = NaverMapSdk.OnAuthFailedListener { error ->
             view.post {
@@ -261,6 +288,7 @@ internal fun FamilyMap(
             circles.values.forEach { it.map = null; it.onClickListener = null; it.tag = null }
             circles.clear()
             path.map = null
+            pickerCircle.map = null
             historyPoint.map = null
             historyPoint.onClickListener = null
             historyPoint.tag = null
@@ -304,7 +332,10 @@ internal fun FamilyMap(
                 map.moveCamera(CameraUpdate.toCameraPosition(mapState.camera))
                 map.addOnCameraChangeListener(cameraChanged)
                 map.addOnCameraIdleListener(cameraIdle)
-                map.setOnMapClickListener { _, _ -> information.close() }
+                map.setOnMapClickListener { _, coordinate ->
+                    information.close()
+                    if (pickerEnabled) map.moveCamera(CameraUpdate.scrollTo(coordinate))
+                }
                 if (mapState.owner === view) mapState.currentCamera = { map.cameraPosition }
                 controller = map
             }
@@ -364,6 +395,15 @@ internal fun FamilyMap(
                 map.setContentPadding(0, topPixels, 0, bottomPixels, true)
                 appliedBottom = bottomPixels
                 appliedTop = topPixels
+            }
+            if (pickerMode) {
+                val center = map.cameraPosition.target
+                pickerCircle.center = center
+                pickerCircle.radius = pickerRadius
+                if (pickerCircle.map !== map) pickerCircle.map = map
+                pickerCenterChanged(center.latitude, center.longitude)
+            } else if (pickerCircle.map != null) {
+                pickerCircle.map = null
             }
             if (shownSelection != selectedId) {
                 if ((information.marker?.tag as? MapPerson)?.id != selectedId) information.close()
@@ -479,6 +519,7 @@ internal fun FamilyMap(
         }
     }
     val emptyMessage = when {
+        pickerMode -> null
         historyMode && route.isEmpty() -> "표시할 이동 기록이 없습니다"
         !historyMode && selectedId != null && selectedId !in points -> "선택한 가족의 공유된 위치가 없습니다"
         !historyMode && points.isEmpty() -> "공유된 위치가 없습니다"

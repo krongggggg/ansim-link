@@ -6,6 +6,7 @@ import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
@@ -13,6 +14,7 @@ import com.journeyapps.barcodescanner.ScanContract
 import com.journeyapps.barcodescanner.ScanOptions
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
@@ -44,6 +46,7 @@ import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.util.Locale
+import kotlin.math.roundToInt
 
 internal val Ink = Color(0xFF20243C)
 internal val Muted = Color(0xFF72788E)
@@ -56,7 +59,6 @@ internal fun JSONArray.objects() = (0 until length()).mapNotNull { optJSONObject
 internal fun JSONObject.array(name: String) = optJSONArray(name)?.objects().orEmpty()
 internal fun json(vararg fields: Pair<String, Any?>) = JSONObject().apply { fields.forEach { (k, v) -> put(k, v ?: JSONObject.NULL) } }
 internal fun whenText(value: String): String = runCatching { DateTimeFormatter.ofPattern("MM.dd HH:mm").withZone(ZoneId.systemDefault()).format(Instant.parse(value)) }.getOrDefault("시간 정보 없음")
-internal fun locationText(point: JSONObject?) = point?.let { String.format(Locale.US, "%.5f, %.5f", it.optDouble("latitude"), it.optDouble("longitude")) } ?: "공유된 위치가 없습니다"
 
 class MainActivity : ComponentActivity() {
     private lateinit var store: SessionStore
@@ -412,19 +414,18 @@ class MainActivity : ComponentActivity() {
 
 
 
-@Composable internal fun SafetyScreen(state: JSONObject?, busy: Boolean, mutate: (String, String, JSONObject?) -> Unit) {
-    var form by remember { mutableStateOf("") }
+@Composable internal fun SafetyScreen(state: JSONObject?, busy: Boolean, pickPlace: (Boolean) -> Unit, mutate: (String, String, JSONObject?) -> Unit) {
     var deletingZone by remember { mutableStateOf<JSONObject?>(null) }
     SafetyCard {
         Icon(Icons.Rounded.Radar, null, tint = Violet)
         Text("나의 안심존", fontSize = 19.sp, fontWeight = FontWeight.Bold)
         Text("내 기기가 지정한 구역을 드나들면 가족에게 알립니다. 위치 공유가 켜져 있어야 동작합니다.", color = Muted, fontSize = 13.sp)
         state?.array("zones")?.forEach { zone -> Row(verticalAlignment = Alignment.CenterVertically) {
-            Column(Modifier.weight(1f)) { Text(zone.optString("name"), fontWeight = FontWeight.SemiBold); Text("반경 ${zone.optInt("radius")}m · ${locationText(zone)}", color = Muted, fontSize = 11.sp) }
+            Column(Modifier.weight(1f)) { Text(zone.optString("name"), fontWeight = FontWeight.SemiBold); Text("반경 ${zone.optInt("radius")}m", color = Muted, fontSize = 11.sp) }
             IconButton({ deletingZone = zone }, enabled = !busy) { Icon(Icons.Rounded.DeleteOutline, "안심존 삭제", tint = Muted) }
         } }
         if (state?.array("zones").orEmpty().isEmpty()) Text("집, 학교 등 자주 가는 곳을 등록하세요.", color = Muted, fontSize = 13.sp)
-        OutlinedButton({ form = "zone" }, enabled = !busy && state != null) { Icon(Icons.Rounded.AddLocationAlt, null, modifier = Modifier.size(18.dp)); Spacer(Modifier.width(8.dp)); Text("안심존 등록") }
+        OutlinedButton({ pickPlace(false) }, enabled = !busy && state != null) { Icon(Icons.Rounded.AddLocationAlt, null, modifier = Modifier.size(18.dp)); Spacer(Modifier.width(8.dp)); Text("지도에서 안심존 등록") }
     }
     SafetyCard {
         Icon(Icons.Rounded.NearMe, null, tint = Mint)
@@ -438,12 +439,8 @@ class MainActivity : ComponentActivity() {
                 if (journey.optString("userId") == state.optJSONObject("me")?.optString("id") && status in listOf("active", "overdue")) TextButton({ mutate("POST", "/api/journeys/${journey.getString("id")}/cancel", json()) }, enabled = !busy) { Text("종료") }
             }
         }
-        Button({ form = "journey" }, enabled = !busy && state?.optJSONObject("me")?.optBoolean("sharing") == true) { Text("안심귀가 시작") }
+        Button({ pickPlace(true) }, enabled = !busy && state?.optJSONObject("me")?.optBoolean("sharing") == true) { Text("지도에서 안심귀가 시작") }
         if (state?.optJSONObject("me")?.optBoolean("sharing") != true) Text("홈에서 내 위치 공유를 먼저 켜 주세요.", color = Muted, fontSize = 12.sp)
-    }
-    if (form.isNotBlank()) PlaceDialog(form == "journey", state?.optJSONObject("location"), busy, { form = "" }) { body ->
-        mutate("POST", if (form == "journey") "/api/journeys" else "/api/zones", body)
-        form = ""
     }
     deletingZone?.let { zone ->
         AlertDialog(onDismissRequest = { deletingZone = null }, title = { Text("안심존을 삭제할까요?") },
@@ -453,31 +450,113 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-@Composable private fun PlaceDialog(journey: Boolean, current: JSONObject?, busy: Boolean, dismiss: () -> Unit, submit: (JSONObject) -> Unit) {
-    var name by remember { mutableStateOf("") }
-    var lat by remember { mutableStateOf(current?.optDouble("latitude")?.toString().orEmpty()) }
-    var lon by remember { mutableStateOf(current?.optDouble("longitude")?.toString().orEmpty()) }
-    var radius by remember { mutableStateOf("150") }
-    var minutes by remember { mutableStateOf("30") }
-    val latitude = lat.toDoubleOrNull()
-    val longitude = lon.toDoubleOrNull()
-    val radiusValue = radius.toIntOrNull()
+
+
+
+
+@Composable
+internal fun PlacePickerScreen(
+    journey: Boolean,
+    current: JSONObject?,
+    busy: Boolean,
+    onBack: () -> Unit,
+    onSubmit: (JSONObject) -> Unit,
+) {
+    BackHandler(onBack = onBack)
+    val initial = remember { current?.let { JSONObject(it.toString()) } }
+    val mapState = rememberFamilyMapState(initial, 16.0)
+    var center by remember { mutableStateOf<Pair<Double, Double>?>(null) }
+    var name by rememberSaveable(journey) { mutableStateOf("") }
+    var radius by rememberSaveable(journey) { mutableFloatStateOf(150f) }
+    var minutes by rememberSaveable(journey) { mutableStateOf("30") }
+    val radiusValue = radius.roundToInt()
     val duration = minutes.toLongOrNull()
-    val valid = name.isNotBlank() && latitude != null && latitude.isFinite() && latitude in -90.0..90.0 && longitude != null && longitude.isFinite() && longitude in -180.0..180.0 && radiusValue != null && radiusValue in 50..5000 && (!journey || (duration != null && duration in 1..1440))
-    AlertDialog(onDismissRequest = dismiss, title = { Text(if (journey) "안심귀가 시작" else "안심존 등록") }, text = {
-        Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            Text("현재 위치가 있으면 좌표를 채웁니다. 목적지가 다르면 좌표를 변경하세요.", color = Muted, fontSize = 12.sp)
-            OutlinedTextField(name, { name = it }, label = { Text(if (journey) "목적지 이름" else "장소 이름") }, singleLine = true)
-            OutlinedTextField(lat, { lat = it }, label = { Text("위도 · -90 ~ 90") }, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal), singleLine = true)
-            OutlinedTextField(lon, { lon = it }, label = { Text("경도 · -180 ~ 180") }, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal), singleLine = true)
-            OutlinedTextField(radius, { radius = it }, label = { Text("반경 · 50 ~ 5000m") }, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number), singleLine = true)
-            if (journey) OutlinedTextField(minutes, { minutes = it }, label = { Text("몇 분 후 도착 예정인가요?") }, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number), singleLine = true)
+    val valid = center != null && name.isNotBlank() && radiusValue in 50..5000 &&
+        (!journey || duration != null && duration in 1..1440)
+    val radiusLabel = if (radiusValue >= 1000) String.format(Locale.US, "%.1f km", radiusValue / 1000.0) else "${radiusValue} m"
+
+    Column(Modifier.fillMaxSize().background(Canvas).imePadding()) {
+        ScreenHeader(if (journey) "안심귀가 목적지 선택" else "안심존 위치 선택", onBack)
+        Box(Modifier.weight(1f).fillMaxWidth()) {
+            FamilyMap(
+                state = null,
+                modifier = Modifier.fillMaxSize(),
+                mapState = mapState,
+                pickerMode = true,
+                pickerRadius = radiusValue.toDouble(),
+                onPickerCenter = { latitude, longitude ->
+                    val next = latitude to longitude
+                    if (center != next) center = next
+                },
+            )
+            Surface(
+                modifier = Modifier.align(Alignment.TopCenter).padding(12.dp),
+                color = Color.White.copy(alpha = 0.96f),
+                shape = RoundedCornerShape(12.dp),
+                shadowElevation = 3.dp,
+            ) {
+                Text("지도를 움직여 가운데 표시에 위치를 맞추세요", Modifier.padding(horizontal = 14.dp, vertical = 10.dp), color = Ink, fontSize = 12.sp)
+            }
+            Surface(
+                modifier = Modifier.align(Alignment.Center),
+                shape = CircleShape,
+                color = Color.White,
+                shadowElevation = 6.dp,
+            ) {
+                Icon(Icons.Rounded.Place, "선택할 위치", Modifier.padding(9.dp).size(28.dp), tint = Violet)
+            }
         }
-    }, confirmButton = { TextButton({ submit(json((if (journey) "destination" else "name") to name.trim(), "latitude" to latitude, "longitude" to longitude, "radius" to radiusValue).apply { if (journey) put("deadline", Instant.now().plusSeconds(duration!! * 60).toString()) }) }, enabled = valid && !busy) { Text(if (journey) "시작" else "등록") } }, dismissButton = { TextButton(dismiss) { Text("취소") } })
+        Surface(color = Color.White, shadowElevation = 8.dp) {
+            Column(
+                Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(20.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                OutlinedTextField(
+                    name,
+                    { name = it },
+                    label = { Text(if (journey) "목적지 이름" else "장소 이름") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    Text("반경", fontWeight = FontWeight.SemiBold)
+                    Spacer(Modifier.weight(1f))
+                    Text(radiusLabel, color = Violet, fontWeight = FontWeight.Bold)
+                }
+                Slider(
+                    value = radius,
+                    onValueChange = { radius = ((it / 50f).roundToInt() * 50f).coerceIn(50f, 5000f) },
+                    valueRange = 50f..5000f,
+                    steps = 98,
+                )
+                if (journey) OutlinedTextField(
+                    minutes,
+                    { minutes = it },
+                    label = { Text("몇 분 후 도착 예정인가요?") },
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                Button(
+                    onClick = {
+                        val selected = center ?: return@Button
+                        onSubmit(json(
+                            (if (journey) "destination" else "name") to name.trim(),
+                            "latitude" to selected.first,
+                            "longitude" to selected.second,
+                            "radius" to radiusValue,
+                        ).apply {
+                            if (journey) put("deadline", Instant.now().plusSeconds(duration!! * 60).toString())
+                        })
+                    },
+                    enabled = valid && !busy,
+                    modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp),
+                    shape = RoundedCornerShape(14.dp),
+                ) { Text(if (journey) "이 위치로 안심귀가 시작" else "이 위치로 안심존 등록") }
+            }
+        }
+    }
 }
-
-
-
 
 @Composable internal fun MemberRow(member: JSONObject) {
     Row(verticalAlignment = Alignment.CenterVertically) {

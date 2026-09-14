@@ -34,7 +34,7 @@ import org.json.JSONObject
 import java.time.Duration
 import java.time.Instant
 
-private enum class HomePage { Map, Family, History, Safety, Alerts, Settings }
+private enum class HomePage { Map, Family, History, Safety, PlacePicker, Alerts, Settings }
 
 @Composable internal fun ScreenHeader(title: String, onBack: () -> Unit, actions: @Composable RowScope.() -> Unit = {}) {
     Row(Modifier.fillMaxWidth().heightIn(min = 64.dp).padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -57,6 +57,7 @@ private enum class HomePage { Map, Family, History, Safety, Alerts, Settings }
     var historyId by rememberSaveable { mutableStateOf("") }
     var shareDetails by rememberSaveable { mutableStateOf(false) }
     var shareConfirm by rememberSaveable { mutableStateOf(false) }
+    var placeJourney by rememberSaveable { mutableStateOf(false) }
     val mapState = rememberFamilyMapState()
     val visibleState = remember(state, revokePending) {
         if (!revokePending || state == null) state else JSONObject().apply {
@@ -73,7 +74,7 @@ private enum class HomePage { Map, Family, History, Safety, Alerts, Settings }
     val own = selectedId == meId
     val selectedSharing = if (own) sharing else selected?.optBoolean("sharing") == true
     val point = if (!selectedSharing) null else if (own) state?.optJSONObject("location") else selected?.optJSONObject("location")
-    val back = { page = HomePage.Map }
+    val back: () -> Unit = { page = if (page == HomePage.PlacePicker) HomePage.Safety else HomePage.Map }
     val choose: (String) -> Unit = { id -> selectedId = id; recenterRequest++; page = HomePage.Map }
     val shareLabel = when {
         revokePending -> "공유 해제 확인 중"
@@ -107,13 +108,23 @@ private enum class HomePage { Map, Family, History, Safety, Alerts, Settings }
             val person = if (historyId == meId) me else members.find { it.optString("id") == historyId }
             HistoryScreen(historyId, person?.optString("name") ?: "연결 해제된 가족", person != null && (if (historyId == meId) sharing else person.optBoolean("sharing")), onHistory, back)
         }
+        HomePage.PlacePicker -> PlacePickerScreen(
+            journey = placeJourney,
+            current = state?.optJSONObject("location"),
+            busy = busy,
+            onBack = { page = HomePage.Safety },
+            onSubmit = { body ->
+                onMutation("POST", if (placeJourney) "/api/journeys" else "/api/zones", body)
+                page = HomePage.Safety
+            },
+        )
         HomePage.Safety, HomePage.Alerts, HomePage.Settings -> Column(Modifier.fillMaxSize()) {
             ScreenHeader(when (page) { HomePage.Safety -> "내 안심존 · 안심귀가"; HomePage.Alerts -> "가족 소식"; else -> "설정" }, back) {
                 IconButton(onRefresh, enabled = !busy) { Icon(Icons.Rounded.Refresh, "새로고침") }
             }
             Column(Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState()).padding(20.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
                 when (page) {
-                    HomePage.Safety -> SafetyScreen(state, busy, onMutation)
+                    HomePage.Safety -> SafetyScreen(state, busy, { journey -> placeJourney = journey; page = HomePage.PlacePicker }, onMutation)
                     HomePage.Settings -> {
                         OutlinedButton({ shareDetails = true }, Modifier.fillMaxWidth()) { Icon(Icons.Rounded.LocationOn, null); Spacer(Modifier.width(8.dp)); Text(shareLabel) }
                         SettingsScreen(me, busy, monitoring, onMonitoring, onMutation, onDelete, serverUrl)

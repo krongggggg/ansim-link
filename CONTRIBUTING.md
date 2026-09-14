@@ -36,7 +36,7 @@ cd android
 
 지도 키 없이 두 변형을 빌드할 수 있습니다. 이때 지도 영역에는 설정 필요 안내가 표시됩니다. 실제 지도를 검증하려면 본인 NAVER Cloud Maps에 `org.ansim.link`와 Dynamic Map을 등록하세요. 키 우선순위는 `-PnaverMapKeyId` → `NAVER_MAP_KEY_ID` → 무시되는 `android/local.properties`의 `naverMapKeyId`입니다. 가짜 키·공유 키로 CI를 우회하지 마세요. release 출력은 unsigned이며 설치·운영 배포에는 별도 서명이 필요합니다.
 
-CI는 고정 커밋의 Actions로 wrapper 무결성 검사, 키 없는 Android debug/unsigned release 빌드, 서버 테스트와 격리된 컨테이너 검증을 수행합니다. APK 업로드·서명·Play 제출은 하지 않습니다. 현재 Android 소스는 버전 1.2.0(code 4), target/compile SDK 35입니다. 향후 Play 제출에는 API 36 이상 전환 등 당시 정책 검증이 별도로 필요합니다.
+CI는 고정 커밋의 Actions로 wrapper 무결성 검사, 키 없는 Android debug/unsigned release 빌드, 서버 테스트와 격리된 컨테이너 검증을 수행합니다. APK 업로드·서명·Play 제출은 하지 않습니다. 현재 Android 소스는 버전 1.3.0(code 5), target/compile SDK 35입니다. 향후 Play 제출에는 API 36 이상 전환 등 당시 정책 검증이 별도로 필요합니다.
 
 - 서버 동작을 바꾸면 영향받는 테스트를 갱신하고, 실제 오류를 막는 재현을 추가하세요. 테스트는 임시·합성 데이터를 사용하고 실서버에 접근하지 않아야 합니다.
 - 초대 참여, 공유 동의/중지, 연결 해제·프로필 삭제 같은 상태 전환을 바꿨다면 접근 권한과 저장 데이터의 결과도 확인합니다. 기기 확인이 필요한 변경은 실제로 확인한 범위를 밝히고, 실행하지 못한 항목은 PR에 명시하세요. 지도 인증·위치 포그라운드 서비스·백그라운드 알림은 빌드 성공만으로 검증되지 않습니다.
