@@ -65,12 +65,12 @@ internal fun IncomingInvitationScreen(
                     Text("유효 시간: ${whenText(value.expiresAt)}", color = Muted)
                     if (hasSession) {
                         Text("현재 프로필의 역할이 $roleName 역할이면 이 가족과 연결할 수 있습니다.")
-                        InfoStrip("역할이 다르면 연결되지 않습니다. 피보호자는 보호자 위치를 볼 수 없고, 보호자는 피보호자가 동의해 공유한 위치만 볼 수 있습니다.", Violet)
+                        InfoStrip("역할이 다르면 연결되지 않습니다. 보호자는 연결된 가족의 공유 위치를 모두 볼 수 있고, 피보호자는 보호자 위치를 볼 수 없습니다.", Violet)
                     } else {
                         Text(if (value.isSetup) "서버 운영자가 발급한 첫 기기용 보호자 초대입니다. 연결한 뒤 역할별로 가족을 초대할 수 있습니다." else "초대한 가족과 연결하고 이 기기에서 사용할 이름을 정합니다.")
                         OutlinedTextField(name, { name = it }, enabled = !busy, label = { Text("가족에게 보일 이름") }, singleLine = true, modifier = Modifier.fillMaxWidth())
                         Text("아래 버튼을 누르면 이 서버를 신뢰하고 $roleName 역할로 참여하는 데 동의합니다. 서버 운영자가 이름과 가족 연결 정보를 처리합니다.", color = Muted, fontSize = 13.sp)
-                        InfoStrip(if (value.role == "protected") "위치 공유는 꺼진 상태로 시작하며, 연결된 보호자에게 공유하려면 나중에 별도로 동의해야 합니다." else "보호자 위치는 피보호자에게 제공되지 않습니다.", Violet)
+                        InfoStrip(if (value.role == "protected") "위치 공유는 꺼진 상태로 시작하며, 연결된 가족에게 공유하려면 나중에 별도로 동의해야 합니다." else "위치 공유는 꺼진 상태로 시작합니다. 공유하면 연결된 보호자만 볼 수 있습니다.", Violet)
                     }
                 }
             }

@@ -14,7 +14,7 @@ const MEDIA_LIMIT = 5 * 1024 * 1024;
 const ENCODED_LIMIT = Math.ceil(MEDIA_LIMIT / 3) * 4;
 const hash = value => createHash('sha256').update(value).digest('hex');
 const iso = value => value == null ? null : new Date(value).toISOString();
-const userView = row => ({ id: row.id, name: row.name, role: row.role ?? null, sharing: row.role === 'protected' && Boolean(row.sharing), inactivityMinutes: row.inactivity_minutes });
+const userView = row => ({ id: row.id, name: row.name, role: row.role ?? null, sharing: row.role !== null && Boolean(row.sharing), inactivityMinutes: row.inactivity_minutes });
 const locationView = row => row ? ({ latitude: row.latitude, longitude: row.longitude, accuracy: row.accuracy, recordedAt: iso(row.recorded_at) }) : null;
 const zoneView = row => ({ id: row.id, name: row.name, latitude: row.latitude, longitude: row.longitude, radius: row.radius });
 const journeyView = row => ({ id: row.id, userId: row.user_id, userName: row.user_name, destination: row.destination, latitude: row.latitude, longitude: row.longitude, radius: row.radius, deadline: iso(row.deadline), status: row.status, createdAt: iso(row.created_at) });
@@ -333,7 +333,7 @@ export function createApp({ dataDir = './data', now = Date.now, trustProxy = pro
     return Boolean(sql('SELECT 1 FROM connections WHERE user_a=? AND user_b=?').get(first, second));
   };
   const canViewLocation = (viewer, target) => viewer.id === target.id ||
-    (viewer.role === 'guardian' && target.role === 'protected' && connected(viewer.id, target.id));
+    (viewer.role !== null && target.role !== null && connected(viewer.id, target.id) && (viewer.role === 'guardian' || target.role === 'protected'));
   const safetyRecipients = actor => {
     const target = sql('SELECT id,role FROM users WHERE id=?').get(actor);
     return target ? [actor, ...connections(actor).filter(viewer => canViewLocation(viewer, target)).map(viewer => viewer.id)] : [actor];
@@ -542,15 +542,17 @@ export function createApp({ dataDir = './data', now = Date.now, trustProxy = pro
         };
       });
       const journeys = sql(`SELECT j.*,u.name AS user_name FROM journeys j JOIN users u ON u.id=j.user_id
-        WHERE (u.id=? OR (?='guardian' AND u.role='protected' AND u.sharing=1 AND EXISTS(SELECT 1 FROM connections c WHERE (c.user_a=? AND c.user_b=u.id) OR (c.user_b=? AND c.user_a=u.id))))
-        AND (j.created_at>=? OR j.status IN ('active','overdue')) ORDER BY (j.status IN ('active','overdue')) DESC,j.created_at DESC LIMIT 300`).all(user.id, user.role, user.id, user.id, now() - RETENTION).map(journeyView);
+        WHERE (u.id=? OR (u.sharing=1 AND u.role IS NOT NULL AND ? IS NOT NULL AND (?='guardian' OR u.role='protected')
+          AND EXISTS(SELECT 1 FROM connections c WHERE (c.user_a=? AND c.user_b=u.id) OR (c.user_b=? AND c.user_a=u.id))))
+        AND (j.created_at>=? OR j.status IN ('active','overdue')) ORDER BY (j.status IN ('active','overdue')) DESC,j.created_at DESC LIMIT 300`).all(user.id, user.role, user.role, user.id, user.id, now() - RETENTION).map(journeyView);
       const sos = sql(`SELECT s.*,u.name AS user_name,u.role AS user_role FROM sos s JOIN users u ON u.id=s.user_id WHERE (s.status='active' OR s.resolved_at>=?)
-        AND (s.user_id=? OR (?='guardian' AND u.role='protected' AND EXISTS(SELECT 1 FROM connections c WHERE (c.user_a=? AND c.user_b=s.user_id) OR (c.user_b=? AND c.user_a=s.user_id))))
-        ORDER BY (s.status='active') DESC,s.created_at DESC LIMIT 300`).all(now() - RETENTION, user.id, user.role, user.id, user.id).map(sosView);
+        AND (s.user_id=? OR (u.role IS NOT NULL AND ? IS NOT NULL AND (?='guardian' OR u.role='protected')
+          AND EXISTS(SELECT 1 FROM connections c WHERE (c.user_a=? AND c.user_b=s.user_id) OR (c.user_b=? AND c.user_a=s.user_id))))
+        ORDER BY (s.status='active') DESC,s.created_at DESC LIMIT 300`).all(now() - RETENTION, user.id, user.role, user.role, user.id, user.id).map(sosView);
       const events = sql('SELECT e.id,e.type,e.title,e.body,e.actor_id,e.created_at,u.role AS actor_role FROM events e JOIN users u ON u.id=e.actor_id WHERE e.recipient_id=? AND e.created_at>=? ORDER BY e.id DESC LIMIT 100').all(user.id, now() - RETENTION)
         .filter(event => event.actor_id === user.id || event.type === 'connection_added' || event.type === 'sos_ack' || canViewLocation(user, { id: event.actor_id, role: event.actor_role }))
         .map(event => ({ id: event.id, type: event.type, title: event.title, body: event.body, actorId: event.actor_id, createdAt: iso(event.created_at) }));
-      const ownSharing = user.role === 'protected' && Boolean(user.sharing);
+      const ownSharing = user.role !== null && Boolean(user.sharing);
       return json(res, 200, { me: userView(user), members, zones: sql('SELECT * FROM zones WHERE user_id=? ORDER BY name,id').all(user.id).map(zoneView), journeys, events, sos, location: ownSharing ? locationView(latest(user.id)) : null, onboarding: { publicBaseUrl, apkAvailable: apkAvailable() } });
     }
     if (method === 'PATCH' && path === '/api/me/role') {
@@ -559,12 +561,6 @@ export function createApp({ dataDir = './data', now = Date.now, trustProxy = pro
       transaction(() => {
         if (sql('SELECT role FROM users WHERE id=?').get(user.id).role !== null) fail(409, '역할은 한 번 정하면 앱에서 변경할 수 없습니다.');
         sql('UPDATE users SET role=? WHERE id=? AND role IS NULL').run(role, user.id);
-        if (role === 'guardian') {
-          sql('UPDATE users SET sharing=0,sharing_since=NULL,last_seen_at=NULL,anchor_latitude=NULL,anchor_longitude=NULL,anchor_accuracy=NULL,last_moved_at=NULL,inactivity_alerted=0,offline_alerted=0 WHERE id=?').run(user.id);
-          sql('DELETE FROM locations WHERE user_id=?').run(user.id);
-          sql("UPDATE journeys SET status='cancelled',finished_at=? WHERE user_id=? AND status IN ('active','overdue')").run(now(), user.id);
-          sql('UPDATE zones SET state=NULL WHERE user_id=?').run(user.id);
-        }
       });
       return json(res, 200, { user: userView(sql('SELECT * FROM users WHERE id=?').get(user.id)) });
     }
@@ -572,7 +568,7 @@ export function createApp({ dataDir = './data', now = Date.now, trustProxy = pro
       fields(body, ['name', 'sharing', 'inactivityMinutes']);
       const name = body.name === undefined ? user.name : text(body.name, '이름', 1, 60);
       if (body.sharing !== undefined && typeof body.sharing !== 'boolean') fail(400, '위치 공유 설정을 확인해 주세요.');
-      if (body.sharing === true && user.role !== 'protected') fail(403, '피보호자 역할만 자신의 위치 공유를 켤 수 있습니다.');
+      if (body.sharing === true && user.role === null) fail(403, '역할을 먼저 선택해야 위치 공유를 켤 수 있습니다.');
       const sharing = body.sharing === undefined ? user.sharing : Number(body.sharing);
       const inactivity = body.inactivityMinutes === undefined ? user.inactivity_minutes : number(body.inactivityMinutes, '알림 시간', 60, 4320);
       if (!Number.isInteger(inactivity)) fail(400, '알림 시간은 정수 분으로 입력해 주세요.');
@@ -647,7 +643,7 @@ export function createApp({ dataDir = './data', now = Date.now, trustProxy = pro
     if (method === 'POST' && path === '/api/locations') {
       fields(body, ['latitude', 'longitude', 'accuracy', 'recordedAt']);
       rate(`location:${user.id}`, 60, MINUTE);
-      if (user.role !== 'protected') fail(403, '피보호자 역할만 위치를 전송할 수 있습니다.');
+      if (user.role === null) fail(403, '역할을 먼저 선택해야 위치를 전송할 수 있습니다.');
       if (!user.sharing) fail(403, '위치 공유가 꺼져 있습니다.');
       const fix = { ...point(body), accuracy: number(body.accuracy, '위치 정확도', 0, 10_000) };
       const recordedAt = timestamp(body.recordedAt, '위치 기록');
@@ -687,7 +683,7 @@ export function createApp({ dataDir = './data', now = Date.now, trustProxy = pro
     }
     if (method === 'POST' && path === '/api/zones') {
       fields(body, ['name', 'latitude', 'longitude', 'radius']);
-      if (user.role !== 'protected') fail(403, '피보호자 역할만 안심구역을 등록할 수 있습니다.');
+      if (user.role === null) fail(403, '역할을 먼저 선택해야 안심구역을 등록할 수 있습니다.');
       const name = text(body.name, '안심구역 이름', 1, 100);
       const center = point(body);
       const radius = number(body.radius, '반경', 50, 5000);
@@ -705,7 +701,7 @@ export function createApp({ dataDir = './data', now = Date.now, trustProxy = pro
     }
     if (method === 'POST' && path === '/api/journeys') {
       fields(body, ['destination', 'latitude', 'longitude', 'radius', 'deadline']);
-      if (user.role !== 'protected') fail(403, '피보호자 역할만 안심귀가를 시작할 수 있습니다.');
+      if (user.role === null) fail(403, '역할을 먼저 선택해야 안심귀가를 시작할 수 있습니다.');
       if (!user.sharing) fail(403, '안심귀가를 시작하려면 직접 위치 공유를 켜 주세요.');
       rate(`journey:${user.id}`, 20, 60 * MINUTE);
       const destination = text(body.destination, '목적지 이름', 1, 100);

@@ -216,7 +216,7 @@ test('legacy migration preserves active device access and family data without re
   assert.deepEqual((await c.state(relative)).members, []);
 });
 
-test('version 2 storage migrates to unassigned roles without exposing legacy locations', async t => {
+test('version 2 storage hides sharing until role assignment and then preserves it', async t => {
   const account = { token: randomBytes(32).toString('base64url') };
   const code = randomBytes(12).toString('base64url');
   const digest = value => createHash('sha256').update(value).digest('hex');
@@ -252,7 +252,7 @@ test('version 2 storage migrates to unassigned roles without exposing legacy loc
   assert.deepEqual([state.me.role, state.me.sharing, state.location], [null, false, null]);
   assert.equal((await c.request('GET', `/api/invites/${code}`)).body.role, 'protected');
   assert.equal((await c.request('PATCH', '/api/me/role', account.token, { role: 'guardian' })).status, 200);
-  assert.deepEqual([(await c.state(account)).me.role, (await c.state(account)).me.sharing], ['guardian', false]);
+  assert.deepEqual([(await c.state(account)).me.role, (await c.state(account)).me.sharing], ['guardian', true]);
   await c.restart();
   assert.equal((await c.state(account)).me.role, 'guardian');
 });
@@ -307,61 +307,67 @@ test('mutual consent, single-use invitations, sharing erasure and revocation per
   assert.equal((await c.request('GET', '/api/state', owner.token)).status, 401);
 });
 
-test('role matrix exposes protected locations only to connected guardians', async t => {
+test('role matrix supports multiple guardians while hiding guardian locations from protected users', async t => {
   const c = await context(t);
   const child = await c.member('피보호자', 'protected');
   const guardian = await c.member('보호자', 'guardian');
   const protectedPeer = await c.member('다른 피보호자', 'protected');
   const guardianPeer = await c.member('다른 보호자', 'guardian');
 
-  const guardianInvite = (await c.request('POST', '/api/invites', child.token, { role: 'guardian' })).body;
-  assert.equal(guardianInvite.role, 'guardian');
-  assert.equal((await c.request('POST', '/api/invites/accept', protectedPeer.token, { code: guardianInvite.code })).status, 409);
-  assert.equal((await c.request('POST', '/api/invites/accept', guardian.token, { code: guardianInvite.code })).status, 200);
+  const firstGuardianInvite = (await c.request('POST', '/api/invites', child.token, { role: 'guardian' })).body;
+  assert.equal(firstGuardianInvite.role, 'guardian');
+  assert.equal((await c.request('POST', '/api/invites/accept', protectedPeer.token, { code: firstGuardianInvite.code })).status, 409);
+  assert.equal((await c.request('POST', '/api/invites/accept', guardian.token, { code: firstGuardianInvite.code })).status, 200);
+  const secondGuardianInvite = (await c.request('POST', '/api/invites', child.token, { role: 'guardian' })).body;
+  assert.equal((await c.request('POST', '/api/invites/accept', guardianPeer.token, { code: secondGuardianInvite.code })).status, 200);
   const protectedInvite = (await c.request('POST', '/api/invites', child.token, { role: 'protected' })).body;
   assert.equal((await c.request('POST', '/api/invites/accept', protectedPeer.token, { code: protectedInvite.code })).status, 200);
   const peerInvite = (await c.request('POST', '/api/invites', guardian.token, { role: 'guardian' })).body;
   assert.equal((await c.request('POST', '/api/invites/accept', guardianPeer.token, { code: peerInvite.code })).status, 200);
 
-  await c.share(child);
-  await c.fix(child);
-  const journey = await c.request('POST', '/api/journeys', child.token, { destination: '학교', latitude: 37.1, longitude: 127, radius: 100, deadline: new Date(c.now() + 60 * MINUTE).toISOString() });
-  assert.equal(journey.status, 201);
+  for (const account of [child, guardian, protectedPeer, guardianPeer]) await c.share(account);
+  await c.fix(child, 37, 127);
+  await c.fix(guardian, 38, 128);
+  await c.fix(protectedPeer, 39, 129);
+  await c.fix(guardianPeer, 40, 130);
+  const childJourney = await c.request('POST', '/api/journeys', child.token, { destination: '학교', latitude: 37.1, longitude: 127, radius: 100, deadline: new Date(c.now() + 60 * MINUTE).toISOString() });
+  const guardianJourney = await c.request('POST', '/api/journeys', guardian.token, { destination: '보호자 목적지', latitude: 38.1, longitude: 128, radius: 100, deadline: new Date(c.now() + 60 * MINUTE).toISOString() });
+  assert.deepEqual([childJourney.status, guardianJourney.status], [201, 201]);
+  assert.equal((await c.request('POST', '/api/zones', guardian.token, { name: '보호자 구역', latitude: 38, longitude: 128, radius: 100 })).status, 201);
   const childSos = await c.request('POST', '/api/sos', child.token, { message: '도움 요청', latitude: 37, longitude: 127 });
-  assert.equal(childSos.status, 201);
+  const guardianSos = await c.request('POST', '/api/sos', guardian.token, { message: '보호자 도움 요청', latitude: 38, longitude: 128 });
+  assert.deepEqual([childSos.status, guardianSos.status], [201, 201]);
 
   const guardianState = await c.state(guardian);
   const visibleChild = guardianState.members.find(member => member.id === child.user.id);
-  assert.deepEqual([visibleChild.role, visibleChild.canViewLocation, visibleChild.sharing, visibleChild.location.latitude], ['protected', true, true, 37]);
-  assert.equal(guardianState.journeys.some(item => item.userId === child.user.id), true);
+  const visibleGuardianPeer = guardianState.members.find(member => member.id === guardianPeer.user.id);
+  assert.deepEqual([guardianState.location.latitude, visibleChild.canViewLocation, visibleChild.location.latitude, visibleGuardianPeer.canViewLocation, visibleGuardianPeer.location.latitude], [38, true, 37, true, 40]);
+  assert.equal(guardianState.journeys.some(item => item.id === childJourney.body.journey.id), true);
   assert.equal(guardianState.sos.some(item => item.id === childSos.body.sos.id), true);
-  assert.equal((await c.request('GET', `/api/locations/${child.user.id}`, guardian.token)).status, 200);
+  assert.equal((await c.request('GET', `/api/locations/${guardianPeer.user.id}`, guardian.token)).status, 200);
 
   const childState = await c.state(child);
   const hiddenGuardian = childState.members.find(member => member.id === guardian.user.id);
-  assert.deepEqual([hiddenGuardian.role, hiddenGuardian.canViewLocation, hiddenGuardian.sharing, hiddenGuardian.location], ['guardian', false, null, null]);
+  const visibleProtectedPeer = childState.members.find(member => member.id === protectedPeer.user.id);
+  assert.deepEqual([childState.location.latitude, hiddenGuardian.canViewLocation, hiddenGuardian.sharing, hiddenGuardian.location], [37, false, null, null]);
+  assert.deepEqual([visibleProtectedPeer.canViewLocation, visibleProtectedPeer.sharing, visibleProtectedPeer.location.latitude], [true, true, 39]);
+  assert.equal(childState.sos.some(item => item.id === guardianSos.body.sos.id), false);
   assert.equal((await c.request('GET', `/api/locations/${guardian.user.id}`, child.token)).status, 404);
-  assert.equal((await c.request('PATCH', '/api/me', guardian.token, { sharing: true })).status, 403);
-  assert.equal((await c.request('POST', '/api/locations', guardian.token, { latitude: 38, longitude: 128, accuracy: 5, recordedAt: new Date(c.now()).toISOString() })).status, 403);
-  assert.equal((await c.request('POST', '/api/zones', guardian.token, { name: '보호자 구역', latitude: 38, longitude: 128, radius: 100 })).status, 403);
-  assert.equal((await c.request('POST', '/api/journeys', guardian.token, { destination: '보호자 목적지', latitude: 38, longitude: 128, radius: 100, deadline: new Date(c.now() + 60 * MINUTE).toISOString() })).status, 403);
-
-  const parentSos = await c.request('POST', '/api/sos', guardian.token, { message: '보호자 도움 요청', latitude: 38, longitude: 128 });
-  assert.equal(parentSos.status, 201);
-  assert.equal((await c.state(child)).sos.some(item => item.id === parentSos.body.sos.id), false);
-  assert.equal((await c.request('POST', `/api/sos/${parentSos.body.sos.id}/ack`, child.token, {})).status, 404);
+  assert.equal((await c.request('GET', `/api/locations/${protectedPeer.user.id}`, child.token)).status, 200);
+  assert.equal((await c.request('POST', `/api/sos/${guardianSos.body.sos.id}/ack`, child.token, {})).status, 404);
 
   const protectedState = await c.state(protectedPeer);
-  const hiddenProtected = protectedState.members.find(member => member.id === child.user.id);
-  assert.deepEqual([hiddenProtected.canViewLocation, hiddenProtected.sharing, hiddenProtected.location], [false, null, null]);
-  assert.equal(protectedState.journeys.some(item => item.userId === child.user.id), false);
-  assert.equal(protectedState.sos.some(item => item.id === childSos.body.sos.id), false);
-  assert.equal((await c.request('GET', `/api/locations/${child.user.id}`, protectedPeer.token)).status, 404);
+  const visibleProtected = protectedState.members.find(member => member.id === child.user.id);
+  assert.deepEqual([visibleProtected.canViewLocation, visibleProtected.sharing, visibleProtected.location.latitude], [true, true, 37]);
+  assert.equal(protectedState.journeys.some(item => item.id === childJourney.body.journey.id), true);
+  assert.equal(protectedState.sos.some(item => item.id === childSos.body.sos.id), true);
+  assert.equal((await c.request('GET', `/api/locations/${child.user.id}`, protectedPeer.token)).status, 200);
 
   const guardianPeerState = await c.state(guardianPeer);
-  const hiddenGuardianPeer = guardianPeerState.members.find(member => member.id === guardian.user.id);
-  assert.deepEqual([hiddenGuardianPeer.canViewLocation, hiddenGuardianPeer.sharing, hiddenGuardianPeer.location], [false, null, null]);
-  assert.equal((await c.request('GET', `/api/locations/${guardian.user.id}`, guardianPeer.token)).status, 404);
+  const visibleGuardian = guardianPeerState.members.find(member => member.id === guardian.user.id);
+  assert.deepEqual([visibleGuardian.canViewLocation, visibleGuardian.sharing, visibleGuardian.location.latitude], [true, true, 38]);
+  assert.equal(guardianPeerState.sos.some(item => item.id === guardianSos.body.sos.id), true);
+  assert.equal((await c.request('GET', `/api/locations/${guardian.user.id}`, guardianPeer.token)).status, 200);
 });
 
 test('public invitation previews are origin-bound, escaped and read-only until explicit acceptance', async t => {

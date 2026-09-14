@@ -112,7 +112,7 @@ class MainActivity : ComponentActivity() {
                                         act {
                                             api.request("PATCH", "/api/me/role", json("role" to role))
                                             refresh()
-                                            notice(if (role == "guardian") "보호자 역할로 설정했습니다. 피보호자의 공유 위치만 볼 수 있습니다." else "피보호자 역할로 설정했습니다. 보호자에게 내 위치를 공유할 수 있습니다.")
+                                            notice(if (role == "guardian") "보호자 역할로 설정했습니다. 연결된 가족의 공유 위치를 볼 수 있습니다." else "피보호자 역할로 설정했습니다. 보호자를 제외한 가족의 공유 위치를 볼 수 있습니다.")
                                         }
                                     }
                                     else -> HomeScreen(loaded, busy, revokePending, SafetyService.running,
@@ -410,12 +410,12 @@ class MainActivity : ComponentActivity() {
         Text("기존 프로필은 업데이트 후 한 번만 역할을 정합니다. 역할은 위치 접근 권한을 결정하며 앱에서 다시 바꿀 수 없습니다.", color = Muted, lineHeight = 23.sp)
         SafetyCard {
             Text("피보호자", fontSize = 20.sp, fontWeight = FontWeight.Bold)
-            Text("내가 직접 동의하면 연결된 보호자에게 현재 위치와 최근 이동 기록을 공유합니다. 보호자 위치는 볼 수 없습니다.", color = Muted, lineHeight = 22.sp)
+            Text("내가 직접 동의하면 연결된 가족에게 현재 위치와 최근 이동 기록을 공유합니다. 다른 피보호자 위치는 볼 수 있지만 보호자 위치는 볼 수 없습니다.", color = Muted, lineHeight = 22.sp)
             Button({ pending = "protected" }, enabled = !busy, modifier = Modifier.fillMaxWidth()) { Text("피보호자로 선택") }
         }
         SafetyCard {
             Text("보호자", fontSize = 20.sp, fontWeight = FontWeight.Bold)
-            Text("연결된 피보호자가 동의해 공유한 위치와 이동 기록을 확인합니다. 보호자의 위치는 가족에게 제공하지 않습니다.", color = Muted, lineHeight = 22.sp)
+            Text("나와 연결된 보호자·피보호자의 공유 위치와 이동 기록을 모두 확인합니다. 내 위치를 공유하면 다른 보호자만 볼 수 있습니다.", color = Muted, lineHeight = 22.sp)
             OutlinedButton({ pending = "guardian" }, enabled = !busy, modifier = Modifier.fillMaxWidth()) { Text("보호자로 선택") }
         }
         InfoStrip("역할을 잘못 선택하면 앱에서 변경할 수 없습니다. 프로필을 새로 만들려면 현재 프로필 삭제와 새 역할용 초대가 필요합니다.", Danger)
@@ -475,20 +475,11 @@ class MainActivity : ComponentActivity() {
 
 
 @Composable internal fun SafetyScreen(state: JSONObject?, busy: Boolean, pickPlace: (Boolean) -> Unit, mutate: (String, String, JSONObject?) -> Unit) {
-    if (state?.optJSONObject("me")?.optString("role") == "guardian") {
-        SafetyCard {
-            Icon(Icons.Rounded.AdminPanelSettings, null, tint = Violet)
-            Text("보호자 역할", fontSize = 20.sp, fontWeight = FontWeight.Bold)
-            Text("안심존과 안심귀가는 위치를 공유하는 피보호자가 자신의 기기에서 관리합니다.", color = Muted, lineHeight = 22.sp)
-            InfoStrip("이 보호자 기기의 위치와 이동 기록은 피보호자에게 제공되지 않습니다.", Violet)
-        }
-        return
-    }
     var deletingZone by remember { mutableStateOf<JSONObject?>(null) }
     SafetyCard {
         Icon(Icons.Rounded.Radar, null, tint = Violet)
         Text("나의 안심존", fontSize = 19.sp, fontWeight = FontWeight.Bold)
-        Text("내 기기가 지정한 구역을 드나들면 가족에게 알립니다. 위치 공유가 켜져 있어야 동작합니다.", color = Muted, fontSize = 13.sp)
+        Text("내 기기가 지정한 구역을 드나들면 역할상 내 위치를 볼 수 있는 가족에게 알립니다. 위치 공유가 켜져 있어야 동작합니다.", color = Muted, fontSize = 13.sp)
         state?.array("zones")?.forEach { zone -> Row(verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) { Text(zone.optString("name"), fontWeight = FontWeight.SemiBold); Text("반경 ${zone.optInt("radius")}m", color = Muted, fontSize = 11.sp) }
             IconButton({ deletingZone = zone }, enabled = !busy) { Icon(Icons.Rounded.DeleteOutline, "안심존 삭제", tint = Muted) }
@@ -499,7 +490,7 @@ class MainActivity : ComponentActivity() {
     SafetyCard {
         Icon(Icons.Rounded.NearMe, null, tint = Mint)
         Text("안심귀가", fontSize = 19.sp, fontWeight = FontWeight.Bold)
-        Text("목적지와 도착 예정 시간을 가족에게 공유합니다. 도착하거나 예정 시간을 넘기면 알려드립니다.", color = Muted, fontSize = 13.sp)
+        Text("목적지와 도착 예정 시간을 역할상 내 위치를 볼 수 있는 가족에게 공유합니다. 도착하거나 예정 시간을 넘기면 알려드립니다.", color = Muted, fontSize = 13.sp)
         state?.array("journeys")?.forEach { journey ->
             val status = journey.optString("status")
             val label = when (status) { "active" -> "이동 중"; "overdue" -> "예정 시간 초과"; "arrived" -> "도착 완료"; "cancelled" -> "취소됨"; else -> status }

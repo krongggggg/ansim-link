@@ -22,8 +22,8 @@ android {
         applicationId = "org.ansim.link"
         minSdk = 26
         targetSdk = 35
-        versionCode = 6
-        versionName = "1.4.0"
+        versionCode = 7
+        versionName = "1.4.1"
         manifestPlaceholders["naverMapKeyId"] = naverMapKeyId
         buildConfigField("boolean", "NAVER_MAP_CONFIGURED", naverMapKeyId.isNotEmpty().toString())
     }

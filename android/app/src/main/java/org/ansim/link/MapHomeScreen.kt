@@ -69,9 +69,8 @@ private enum class HomePage { Map, Family, History, Safety, PlacePicker, Alerts,
     val me = visibleState?.optJSONObject("me")
     val meId = me?.optString("id").orEmpty()
     val role = me?.optString("role").orEmpty()
-    val protectedRole = role == "protected"
+    val sharing = role.isNotBlank() && me?.optBoolean("sharing") == true && !revokePending
     val members = remember(state) { state?.array("members").orEmpty() }
-    val sharing = protectedRole && me?.optBoolean("sharing") == true && !revokePending
     val selected = if (selectedId == meId) me else members.find { it.optString("id") == selectedId }
     val own = selectedId == meId
     val selectedCanView = own || selected?.optBoolean("canViewLocation") == true
@@ -80,7 +79,6 @@ private enum class HomePage { Map, Family, History, Safety, PlacePicker, Alerts,
     val back: () -> Unit = { page = if (page == HomePage.PlacePicker) HomePage.Safety else HomePage.Map }
     val choose: (String) -> Unit = { id -> selectedId = id; recenterRequest++; page = HomePage.Map }
     val shareLabel = when {
-        role == "guardian" -> "보호자 모드 · 내 위치 비공개"
         revokePending -> "공유 해제 확인 중"
         sharing && !collecting -> "위치 수집 중단"
         sharing -> "내 위치 공유 중"
@@ -95,7 +93,7 @@ private enum class HomePage { Map, Family, History, Safety, PlacePicker, Alerts,
     BackHandler(page != HomePage.Map) { back() }
     when (page) {
         HomePage.Map -> MapDashboard(
-            visibleState, me, members, selected, point, own, selectedCanView, protectedRole, selectedSharing, sharing, shareLabel, busy,
+            visibleState, me, members, selected, point, own, selectedCanView, selectedSharing, sharing, shareLabel, busy,
             mapState, selectedId, recenterRequest, choose,
             onRefresh = onRefresh,
             onShareDetails = { shareDetails = true },
@@ -110,7 +108,7 @@ private enum class HomePage { Map, Family, History, Safety, PlacePicker, Alerts,
         HomePage.Family -> FamilyScreen(state, busy, onInvite, onAcceptInvite, onScanInvitation, onMutation, choose, back)
         HomePage.History -> {
             val person = if (historyId == meId) me else members.find { it.optString("id") == historyId }
-            HistoryScreen(historyId, person?.optString("name") ?: "연결 해제된 가족", person != null && (if (historyId == meId) sharing else person.optBoolean("sharing")), onHistory, back)
+            HistoryScreen(historyId, person?.optString("name") ?: "연결 해제된 가족", person != null && (if (historyId == meId) sharing else person.optBoolean("canViewLocation") && person.optBoolean("sharing")), onHistory, back)
         }
         HomePage.PlacePicker -> PlacePickerScreen(
             journey = placeJourney,
@@ -153,32 +151,27 @@ private enum class HomePage { Map, Family, History, Safety, PlacePicker, Alerts,
     }
     if (shareDetails) AlertDialog(
         onDismissRequest = { shareDetails = false },
-        icon = { Icon(if (protectedRole && sharing) Icons.Rounded.LocationOn else Icons.Rounded.LocationOff, null, tint = if (protectedRole && sharing) Mint else Muted) },
-        title = { Text(if (protectedRole) "내 위치 공유" else "보호자 역할") },
+        icon = { Icon(if (sharing) Icons.Rounded.LocationOn else Icons.Rounded.LocationOff, null, tint = if (sharing) Mint else Muted) },
+        title = { Text("내 위치 공유") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
                 Text(shareLabel, fontWeight = FontWeight.Bold)
-                if (protectedRole) {
-                    Text("연결된 보호자에게만 공유합니다. 피보호자와 보호자에게 적용되는 위치 권한은 서로 다릅니다.")
-                    if (revokePending) InfoStrip("이 기기의 수집은 중단했습니다. 서버의 공유 해제는 연결 후 완료됩니다.", Danger)
-                    else if (sharing && !collecting) InfoStrip("서버 공유는 켜져 있지만 이 기기는 수집 중이 아닙니다. 직접 다시 시작할 수 있습니다.", Danger)
-                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                        Text("위치 공유", Modifier.weight(1f))
-                        Switch(sharing, { enable -> shareDetails = false; if (enable) shareConfirm = true else onShare(false) }, enabled = !busy && me != null, modifier = Modifier.semantics { contentDescription = "내 위치 공유 설정" })
-                    }
-                    if (sharing && !collecting && !revokePending) OutlinedButton({ shareDetails = false; shareConfirm = true }, enabled = !busy) { Text("이 기기에서 수집 다시 시작") }
-                    TextButton({ shareDetails = false; page = HomePage.Safety }) { Text("내 안심존 · 안심귀가 관리") }
-                } else {
-                    InfoStrip("피보호자는 이 보호자 기기의 현재 위치와 이동 기록을 조회할 수 없습니다.", Violet)
-                    Text("보호자는 연결된 피보호자가 직접 동의해 공유한 위치와 이동 기록만 확인합니다.", color = Muted, fontSize = 13.sp, lineHeight = 20.sp)
+                Text(if (role == "guardian") "내 위치는 연결된 보호자에게만 공유합니다. 피보호자에게는 현재 위치와 이동 기록을 제공하지 않습니다." else "내 위치는 연결된 보호자와 피보호자에게 공유합니다. 각 사용자가 직접 공유를 켜야 합니다.")
+                if (revokePending) InfoStrip("이 기기의 수집은 중단했습니다. 서버의 공유 해제는 연결 후 완료됩니다.", Danger)
+                else if (sharing && !collecting) InfoStrip("서버 공유는 켜져 있지만 이 기기는 수집 중이 아닙니다. 직접 다시 시작할 수 있습니다.", Danger)
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    Text("위치 공유", Modifier.weight(1f))
+                    Switch(sharing, { enable -> shareDetails = false; if (enable) shareConfirm = true else onShare(false) }, enabled = !busy && me != null, modifier = Modifier.semantics { contentDescription = "내 위치 공유 설정" })
                 }
+                if (sharing && !collecting && !revokePending) OutlinedButton({ shareDetails = false; shareConfirm = true }, enabled = !busy) { Text("이 기기에서 수집 다시 시작") }
+                TextButton({ shareDetails = false; page = HomePage.Safety }) { Text("내 안심존 · 안심귀가 관리") }
             }
         },
         confirmButton = { TextButton({ shareDetails = false }) { Text("닫기") } }
     )
     if (shareConfirm) AlertDialog(
         onDismissRequest = { shareConfirm = false }, icon = { Icon(Icons.Rounded.LocationOn, null) }, title = { Text("내 위치를 공유할까요?") },
-        text = { Text("연결된 보호자만 현재 위치와 최근 7일 이동 기록을 볼 수 있습니다. 피보호자와 다른 보호자에게는 제공되지 않습니다. 앱을 벗어나도 알림을 표시하며 위치를 수집합니다. 공유를 끄면 서버의 위치 기록이 삭제됩니다.\n\n기기 설정에 따라 위치 수집이 중단될 수 있습니다.") },
+        text = { Text(if (role == "guardian") "연결된 보호자만 현재 위치와 최근 7일 이동 기록을 볼 수 있습니다. 피보호자에게는 제공되지 않습니다. 앱을 벗어나도 알림을 표시하며 위치를 수집합니다. 공유를 끄면 서버의 위치 기록이 삭제됩니다.\n\n기기 설정에 따라 위치 수집이 중단될 수 있습니다." else "연결된 보호자와 피보호자가 현재 위치와 최근 7일 이동 기록을 볼 수 있습니다. 앱을 벗어나도 알림을 표시하며 위치를 수집합니다. 공유를 끄면 서버의 위치 기록이 삭제됩니다.\n\n기기 설정에 따라 위치 수집이 중단될 수 있습니다.") },
         confirmButton = { TextButton({ shareConfirm = false; onShare(true) }, enabled = !busy) { Text("동의하고 공유") } },
         dismissButton = { TextButton({ shareConfirm = false }) { Text("취소") } }
     )
@@ -187,7 +180,7 @@ private enum class HomePage { Map, Family, History, Safety, PlacePicker, Alerts,
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable private fun MapDashboard(
     state: JSONObject?, me: JSONObject?, members: List<JSONObject>, person: JSONObject?, point: JSONObject?, own: Boolean,
-    canViewLocation: Boolean, protectedRole: Boolean, personSharing: Boolean, sharing: Boolean, shareLabel: String, busy: Boolean,
+    canViewLocation: Boolean, personSharing: Boolean, sharing: Boolean, shareLabel: String, busy: Boolean,
     mapState: FamilyMapState, selectedId: String, recenterRequest: Int, onSelect: (String) -> Unit,
     onRefresh: () -> Unit, onShareDetails: () -> Unit, onConnect: () -> Unit, onAlerts: () -> Unit, onSettings: () -> Unit,
     onHistory: () -> Unit, onSafety: () -> Unit, onEnableSharing: () -> Unit, onRecenter: () -> Unit
@@ -205,7 +198,7 @@ private enum class HomePage { Map, Family, History, Safety, PlacePicker, Alerts,
         val height = maxHeight
         val landscape = maxWidth > maxHeight
         val selectedPanel: @Composable () -> Unit = {
-            SelectedPersonPanel(person, point, own, canViewLocation, protectedRole, personSharing, members.isEmpty(), busy, onHistory, onSafety, onConnect, onEnableSharing) { summaryHeight = it }
+            SelectedPersonPanel(person, point, own, canViewLocation, personSharing, members.isEmpty(), busy, onHistory, onSafety, onConnect, onEnableSharing) { summaryHeight = it }
         }
         if (landscape) {
             Row(Modifier.fillMaxSize()) {
@@ -293,6 +286,7 @@ private enum class HomePage { Map, Family, History, Safety, PlacePicker, Alerts,
 
 @Composable private fun FamilyChip(person: JSONObject, own: Boolean, chosen: Boolean, onClick: () -> Unit) {
     val name = if (own) "나" else person.optString("name")
+    val roleName = if (person.optString("role") == "guardian") "보호자" else "피보호자"
     val density = LocalDensity.current
     val avatarSize = with(density) { 32.sp.toDp() }
     Surface(onClick, shape = RoundedCornerShape(18.dp), color = if (chosen) Color(0xFFEEEDFF) else Color.White, border = BorderStroke(if (chosen) 2.dp else 1.dp, if (chosen) Violet else Color(0xFFE4E6EF)), shadowElevation = 2.dp,
@@ -303,9 +297,9 @@ private enum class HomePage { Map, Family, History, Safety, PlacePicker, Alerts,
                 Text(name, maxLines = 1, overflow = TextOverflow.Ellipsis, color = Ink, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
                 Text(when {
                     own -> if (person.optString("role") == "guardian") "보호자" else "피보호자"
-                    !person.optBoolean("canViewLocation") -> if (person.optString("role") == "guardian") "보호자 · 위치 비공개" else "역할상 위치 비공개"
-                    !person.optBoolean("sharing") -> "피보호자 · 공유 꺼짐"
-                    else -> "피보호자 · 위치 공유 중"
+                    !person.optBoolean("canViewLocation") -> "보호자 · 위치 비공개"
+                    !person.optBoolean("sharing") -> "$roleName · 공유 꺼짐"
+                    else -> "$roleName · 위치 공유 중"
                 }, color = Muted, fontSize = 10.sp)
             }
         }
@@ -317,7 +311,6 @@ private enum class HomePage { Map, Family, History, Safety, PlacePicker, Alerts,
     point: JSONObject?,
     own: Boolean,
     canViewLocation: Boolean,
-    protectedRole: Boolean,
     sharing: Boolean,
     emptyFamily: Boolean,
     busy: Boolean,
@@ -331,7 +324,6 @@ private enum class HomePage { Map, Family, History, Safety, PlacePicker, Alerts,
     val role = person?.optString("role")
     val roleName = if (role == "guardian") "보호자" else "피보호자"
     val status = when {
-        own && !protectedRole -> "보호자 역할 · 내 위치 비공개"
         !canViewLocation -> "$roleName 위치는 역할상 비공개"
         !sharing -> "위치 공유 꺼짐"
         point == null -> "첫 위치 수신 대기"
@@ -350,17 +342,17 @@ private enum class HomePage { Map, Family, History, Safety, PlacePicker, Alerts,
         if (!point.isNull("accuracy")) Text("위치 정확도 약 ${point.optDouble("accuracy").toInt()}m · 실제 위치와 차이가 있을 수 있어요.", color = Muted, fontSize = 12.sp, lineHeight = 18.sp)
     } else {
         Text(when {
-            own && !protectedRole -> "보호자 위치는 피보호자와 다른 보호자에게 제공하지 않습니다."
-            !canViewLocation -> if (role == "guardian") "피보호자는 보호자의 현재 위치와 이동 기록을 볼 수 없습니다." else "보호자만 연결된 피보호자의 공유 위치를 볼 수 있습니다."
+            !canViewLocation -> "피보호자는 보호자의 현재 위치와 이동 기록을 볼 수 없습니다."
             sharing -> "위치가 도착하면 지도에 표시됩니다. 권한과 기기의 네트워크 상태에 따라 지연될 수 있어요."
             own -> "공유를 켜기 전에는 이 기기의 위치를 수집하지 않습니다."
-            else -> "이 피보호자가 직접 위치 공유를 켜면 지도와 기록을 볼 수 있어요."
+            role == "guardian" -> "이 보호자가 직접 위치 공유를 켜면 다른 보호자의 지도와 기록에 표시됩니다."
+            else -> "이 피보호자가 직접 위치 공유를 켜면 역할상 볼 수 있는 가족의 지도와 기록에 표시됩니다."
         }, color = Muted, fontSize = 13.sp, lineHeight = 20.sp)
     }
     BoxWithConstraints(Modifier.fillMaxWidth()) {
         val actions: @Composable (Modifier) -> Unit = { buttonModifier ->
             OutlinedButton(history, buttonModifier.heightIn(min = 48.dp), enabled = canViewLocation && sharing && !busy) { Icon(Icons.Rounded.Route, null, Modifier.size(18.dp)); Spacer(Modifier.width(6.dp)); Text("위치기록") }
-            OutlinedButton(if (own) safety else connect, buttonModifier.heightIn(min = 48.dp), enabled = !busy && (!own || protectedRole)) { Icon(if (own) Icons.Rounded.Radar else Icons.Rounded.PeopleOutline, null, Modifier.size(18.dp)); Spacer(Modifier.width(6.dp)); Text(if (own) "내 안심존" else "가족 관리") }
+            OutlinedButton(if (own) safety else connect, buttonModifier.heightIn(min = 48.dp), enabled = !busy) { Icon(if (own) Icons.Rounded.Radar else Icons.Rounded.PeopleOutline, null, Modifier.size(18.dp)); Spacer(Modifier.width(6.dp)); Text(if (own) "내 안심존" else "가족 관리") }
         }
         if (maxWidth < 320.dp || LocalDensity.current.fontScale > 1.3f) {
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) { actions(Modifier.fillMaxWidth()) }
@@ -368,7 +360,7 @@ private enum class HomePage { Map, Family, History, Safety, PlacePicker, Alerts,
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) { actions(Modifier.weight(1f)) }
         }
     }
-    if (own && protectedRole && !sharing) Button(enableSharing, Modifier.fillMaxWidth().heightIn(min = 48.dp), enabled = !busy && person != null) { Text("동의하고 위치 공유 시작") }
+    if (own && !sharing) Button(enableSharing, Modifier.fillMaxWidth().heightIn(min = 48.dp), enabled = !busy && person != null) { Text("동의하고 위치 공유 시작") }
     if (emptyFamily) {
         Text("아직 연결된 가족이 없어요. 역할별 초대 코드를 주고받아 연결해 보세요.", color = Muted, fontSize = 12.sp, lineHeight = 19.sp)
         TextButton(connect, Modifier.fillMaxWidth()) { Text("가족 연결하기") }

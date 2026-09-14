@@ -118,7 +118,7 @@ internal fun FamilyScreen(
                 item {
                     Text("함께할 가족을 연결해요", fontSize = 24.sp, fontWeight = FontWeight.Bold, color = Ink)
                     Spacer(Modifier.height(8.dp))
-                    Text("보호자는 연결된 피보호자의 동의한 위치만 볼 수 있고, 피보호자는 보호자 위치를 볼 수 없습니다.", color = Muted, lineHeight = 22.sp)
+                    Text("보호자는 본인과 연결된 보호자·피보호자의 공유 위치를 모두 볼 수 있습니다. 피보호자는 보호자 위치만 볼 수 없습니다.", color = Muted, lineHeight = 22.sp)
                 }
                 item {
                     FamilyEntry(
@@ -327,7 +327,7 @@ private fun InviteFlow(
         verticalArrangement = Arrangement.spacedBy(18.dp),
     ) {
         Text("역할을 정해 가족을 초대해요", fontSize = 23.sp, fontWeight = FontWeight.Bold, color = Ink)
-        Text("초대받는 기기의 역할이 고정됩니다. 보호자는 피보호자의 공유 위치를 확인하고, 피보호자는 보호자 위치를 볼 수 없습니다.", color = Muted, lineHeight = 23.sp)
+        Text("초대받는 기기의 역할이 고정됩니다. 보호자는 연결된 모든 가족의 공유 위치를 확인하고, 피보호자는 보호자 위치만 볼 수 없습니다.", color = Muted, lineHeight = 23.sp)
         SafetyCard {
             if (code.isBlank()) {
                 Icon(Icons.Rounded.AdminPanelSettings, null, tint = Violet, modifier = Modifier.size(36.dp))
@@ -338,7 +338,7 @@ private fun InviteFlow(
                 OutlinedButton({ create("guardian") }, enabled = enabled && !busy, modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp)) {
                     Text("보호자 초대 QR 만들기")
                 }
-                Text("초대는 10분 동안 한 사람이 사용할 수 있습니다. 역할이 다른 기존 프로필은 이 초대를 사용할 수 없습니다.", color = Muted, fontSize = 12.sp, lineHeight = 19.sp)
+                Text("초대는 10분 동안 한 사람이 사용할 수 있습니다. 같은 역할의 가족도 사람마다 새 초대를 만들어 여러 명 연결할 수 있습니다.", color = Muted, fontSize = 12.sp, lineHeight = 19.sp)
             } else {
                 if (expired) {
                     InfoStrip("초대가 만료되었어요. 아래에서 역할을 정해 새 QR을 만들어 주세요.", Danger)
@@ -374,7 +374,7 @@ private fun InviteFlow(
                     OutlinedButton(
                         onClick = {
                             if (expiry?.isAfter(Instant.now()) == true) {
-                                val permission = if (role == "guardian") "연결된 피보호자의 공유 위치만 확인할 수 있습니다." else "보호자 위치는 볼 수 없으며 내 위치 공유는 별도 동의가 필요합니다."
+                                val permission = if (role == "guardian") "본인과 연결된 모든 역할의 공유 위치를 확인할 수 있습니다." else "보호자 위치는 볼 수 없으며 내 위치 공유는 별도 동의가 필요합니다."
                                 val share = Intent(Intent.ACTION_SEND).apply {
                                     type = "text/plain"
                                     putExtra(Intent.EXTRA_TEXT, if (hasLink) "어딧 $roleName 역할 초대입니다.\n$inviteUrl\n만료: ${whenText(expiresAt)} (한 사람만 사용 가능)\n$permission\n앱이 있으면 어딧의 ‘초대 QR 스캔’으로 링크의 QR을 비추거나 이 링크를 여세요. 앱이 없으면 설치 후 같은 QR을 다시 스캔할 수 있습니다."
