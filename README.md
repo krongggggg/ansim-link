@@ -6,10 +6,22 @@
 
 초대로 가족을 연결하고, **각자 켠 위치 공유**를 바탕으로 내 안심존과 안심귀가를 관리합니다.
 
-| 가족 연결 | QR 초대 | 안심존·안심귀가 |
-| :---: | :---: | :---: |
-| <a href="docs/images/family-connections.png"><img src="docs/images/family-connections.png" width="240" alt="시연용 가족 두 명이 연결된 우리 가족 화면"></a> | <a href="docs/images/family-invitation.png"><img src="docs/images/family-invitation.png" width="240" alt="초대 QR을 발급하기 전의 가족 초대 화면"></a> | <a href="docs/images/safety-zone-journey.png"><img src="docs/images/safety-zone-journey.png" width="240" alt="시연용 안심존과 귀가 목적지를 관리하는 화면"></a> |
-| 연결된 가족 확인과 연결 해제.<br>위치 공유는 각자 별도로 동의합니다. | 가족이 준비되면 1회용 초대를 발급합니다.<br>초대 링크에는 연결할 서버 정보가 포함됩니다. | 내가 정한 구역과 귀가 일정을 관리합니다.<br>동작에는 내 위치 공유가 필요합니다. |
+<table>
+  <tr>
+    <th width="33%">가족 연결</th>
+    <th width="33%">QR 초대</th>
+    <th width="33%">안심존·안심귀가</th>
+  </tr>
+  <tr>
+    <td align="center"><a href="docs/images/family-connections.png"><img src="docs/images/family-connections.png" width="240" alt="시연용 가족 두 명이 연결된 우리 가족 화면"></a></td>
+    <td align="center"><a href="docs/images/family-invitation.png"><img src="docs/images/family-invitation.png" width="240" alt="초대 QR을 발급하기 전의 가족 초대 화면"></a></td>
+    <td align="center"><a href="docs/images/safety-zone-journey.png"><img src="docs/images/safety-zone-journey.png" width="240" alt="시연용 안심존과 귀가 목적지를 관리하는 화면"></a></td>
+  </tr>
+</table>
+
+- **가족 연결**: 연결된 가족을 확인하거나 연결을 해제합니다. 위치 공유는 각자 별도로 동의합니다.
+- **QR 초대**: 가족이 준비되면 1회용 초대를 발급합니다. 초대 링크에는 연결할 서버 정보가 포함됩니다.
+- **안심존·안심귀가**: 내가 정한 구역과 귀가 일정을 관리합니다. 동작에는 내 위치 공유가 필요합니다.
 
 격리된 에뮬레이터에서 시연용 이름·가상 위치로 촬영한 실제 앱 화면입니다. 이미지를 누르면 크게 볼 수 있습니다. 운영 서버 주소·기기 토큰·실제 초대 코드는 없으며, 별도 권리 검토가 필요한 지도 타일 화면은 포함하지 않았습니다.
 
