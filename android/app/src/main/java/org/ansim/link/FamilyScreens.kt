@@ -118,7 +118,7 @@ internal fun FamilyScreen(
                 item {
                     Text("함께할 가족을 연결해요", fontSize = 24.sp, fontWeight = FontWeight.Bold, color = Ink)
                     Spacer(Modifier.height(8.dp))
-                    Text("보호자는 본인과 연결된 보호자·피보호자의 공유 위치를 모두 볼 수 있습니다. 피보호자는 보호자 위치만 볼 수 없습니다.", color = Muted, lineHeight = 22.sp)
+                    Text("같은 가족 그룹의 구성원을 함께 표시합니다. 보호자는 그룹의 모든 공유 위치를 보고, 피보호자는 보호자 위치만 볼 수 없습니다.", color = Muted, lineHeight = 22.sp)
                 }
                 item {
                     FamilyEntry(
@@ -132,7 +132,7 @@ internal fun FamilyScreen(
                         enabled = state != null,
                     ) { page = FamilyPage.Join }
                 }
-                item { SectionTitle("연결된 가족", if (state == null) "불러오는 중" else "${members.size}명") }
+                item { SectionTitle("가족 그룹", if (state == null) "불러오는 중" else "${members.size}명") }
                 if (state == null) {
                     item { InfoStrip("가족 정보를 불러오는 중입니다. 아직 연결 상태를 확인할 수 없어요.", Muted) }
                 } else if (members.isEmpty()) {
@@ -150,12 +150,16 @@ internal fun FamilyScreen(
                             ),
                             contentAlignment = Alignment.CenterStart,
                         ) { MemberRow(member) }
-                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                             TextButton({ onMember(memberId) }, modifier = Modifier.weight(1f).heightIn(min = 48.dp)) { Text("지도·권한 보기") }
-                            TextButton(
-                                { disconnectId = memberId }, enabled = !busy,
-                                modifier = Modifier.weight(1f).heightIn(min = 48.dp),
-                            ) { Text("연결 해제", color = Danger) }
+                            if (member.optBoolean("directlyConnected")) {
+                                TextButton(
+                                    { disconnectId = memberId }, enabled = !busy,
+                                    modifier = Modifier.weight(1f).heightIn(min = 48.dp),
+                                ) { Text("직접 연결 해제", color = Danger) }
+                            } else {
+                                Text("가족 그룹으로 연결됨", Modifier.weight(1f), color = Muted, fontSize = 12.sp)
+                            }
                         }
                     }
                 }
@@ -214,7 +218,7 @@ internal fun FamilyScreen(
                         keyboardActions = KeyboardActions(onDone = { focusManager.clearFocus() }),
                         modifier = Modifier.fillMaxWidth(),
                     )
-                    Text("연결하면 서로 가족 목록에 표시됩니다. 역할이 맞아야 초대를 사용할 수 있으며, 피보호자는 보호자 위치와 이동 기록을 볼 수 없습니다.", color = Muted, lineHeight = 22.sp)
+                    Text("연결하면 서로의 가족 그룹이 하나로 합쳐집니다. 역할이 맞아야 초대를 사용할 수 있으며, 피보호자는 보호자 위치와 이동 기록을 볼 수 없습니다.", color = Muted, lineHeight = 22.sp)
                     Button(
                         onClick = {
                             focusManager.clearFocus()
@@ -234,10 +238,10 @@ internal fun FamilyScreen(
         val name = member.optString("name").ifBlank { "가족" }
         AlertDialog(
             onDismissRequest = { disconnectId = null },
-            title = { Text("가족 연결을 해제할까요?") },
+            title = { Text("직접 연결을 해제할까요?") },
             text = {
                 Text(
-                    "${name}님과의 가족 연결을 해제합니다. 역할별 위치·이동 기록 접근도 끝납니다. 다시 연결하려면 같은 역할용 새 초대가 필요해요.",
+                    "${name}님과의 직접 연결을 해제합니다. 이 연결을 통해 합류한 가족도 그룹에서 함께 분리될 수 있으며, 역할별 위치·이동 기록 접근이 끝납니다.",
                     modifier = Modifier.verticalScroll(rememberScrollState()),
                 )
             },
@@ -327,7 +331,7 @@ private fun InviteFlow(
         verticalArrangement = Arrangement.spacedBy(18.dp),
     ) {
         Text("역할을 정해 가족을 초대해요", fontSize = 23.sp, fontWeight = FontWeight.Bold, color = Ink)
-        Text("초대받는 기기의 역할이 고정됩니다. 보호자는 연결된 모든 가족의 공유 위치를 확인하고, 피보호자는 보호자 위치만 볼 수 없습니다.", color = Muted, lineHeight = 23.sp)
+        Text("초대를 수락하면 초대한 사람의 가족 그룹 전체와 연결됩니다. 보호자는 그룹의 모든 공유 위치를 확인하고, 피보호자는 보호자 위치만 볼 수 없습니다.", color = Muted, lineHeight = 23.sp)
         SafetyCard {
             if (code.isBlank()) {
                 Icon(Icons.Rounded.AdminPanelSettings, null, tint = Violet, modifier = Modifier.size(36.dp))
@@ -338,7 +342,7 @@ private fun InviteFlow(
                 OutlinedButton({ create("guardian") }, enabled = enabled && !busy, modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp)) {
                     Text("보호자 초대 QR 만들기")
                 }
-                Text("초대는 10분 동안 한 사람이 사용할 수 있습니다. 같은 역할의 가족도 사람마다 새 초대를 만들어 여러 명 연결할 수 있습니다.", color = Muted, fontSize = 12.sp, lineHeight = 19.sp)
+                Text("초대는 10분 동안 한 사람이 사용할 수 있습니다. 같은 가족 그룹에 이미 참여한 사람은 다시 연결할 수 없습니다.", color = Muted, fontSize = 12.sp, lineHeight = 19.sp)
             } else {
                 if (expired) {
                     InfoStrip("초대가 만료되었어요. 아래에서 역할을 정해 새 QR을 만들어 주세요.", Danger)
@@ -409,7 +413,7 @@ private fun InviteFlow(
                 Text("새 QR을 만들면 이전 초대는 더 이상 사용할 수 없어요.", color = Muted, fontSize = 12.sp, lineHeight = 19.sp)
             }
         }
-        InfoStrip("역할과 위치 공유 동의는 별개입니다. 보호자 위치와 이동 기록은 피보호자 응답에서 항상 숨깁니다.", Violet)
+        InfoStrip("초대 수락 시 가족 그룹이 합쳐집니다. 역할과 위치 공유 동의는 별개이며 보호자 위치는 피보호자에게 항상 숨깁니다.", Violet)
     }
 }
 

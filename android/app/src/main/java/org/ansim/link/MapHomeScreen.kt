@@ -156,7 +156,7 @@ private enum class HomePage { Map, Family, History, Safety, PlacePicker, Alerts,
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
                 Text(shareLabel, fontWeight = FontWeight.Bold)
-                Text(if (role == "guardian") "내 위치는 연결된 보호자에게만 공유합니다. 피보호자에게는 현재 위치와 이동 기록을 제공하지 않습니다." else "내 위치는 연결된 보호자와 피보호자에게 공유합니다. 각 사용자가 직접 공유를 켜야 합니다.")
+                Text(if (role == "guardian") "내 위치는 가족 그룹의 보호자에게만 공유합니다. 피보호자에게는 현재 위치와 이동 기록을 제공하지 않습니다." else "내 위치는 가족 그룹의 보호자와 피보호자에게 공유합니다. 각 사용자가 직접 공유를 켜야 합니다.")
                 if (revokePending) InfoStrip("이 기기의 수집은 중단했습니다. 서버의 공유 해제는 연결 후 완료됩니다.", Danger)
                 else if (sharing && !collecting) InfoStrip("서버 공유는 켜져 있지만 이 기기는 수집 중이 아닙니다. 직접 다시 시작할 수 있습니다.", Danger)
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
@@ -171,7 +171,7 @@ private enum class HomePage { Map, Family, History, Safety, PlacePicker, Alerts,
     )
     if (shareConfirm) AlertDialog(
         onDismissRequest = { shareConfirm = false }, icon = { Icon(Icons.Rounded.LocationOn, null) }, title = { Text("내 위치를 공유할까요?") },
-        text = { Text(if (role == "guardian") "연결된 보호자만 현재 위치와 최근 7일 이동 기록을 볼 수 있습니다. 피보호자에게는 제공되지 않습니다. 앱을 벗어나도 알림을 표시하며 위치를 수집합니다. 공유를 끄면 서버의 위치 기록이 삭제됩니다.\n\n기기 설정에 따라 위치 수집이 중단될 수 있습니다." else "연결된 보호자와 피보호자가 현재 위치와 최근 7일 이동 기록을 볼 수 있습니다. 앱을 벗어나도 알림을 표시하며 위치를 수집합니다. 공유를 끄면 서버의 위치 기록이 삭제됩니다.\n\n기기 설정에 따라 위치 수집이 중단될 수 있습니다.") },
+        text = { Text(if (role == "guardian") "가족 그룹의 보호자만 현재 위치와 최근 7일 이동 기록을 볼 수 있습니다. 피보호자에게는 제공되지 않습니다. 앱을 벗어나도 알림을 표시하며 위치를 수집합니다. 공유를 끄면 서버의 위치 기록이 삭제됩니다.\n\n기기 설정에 따라 위치 수집이 중단될 수 있습니다." else "가족 그룹의 보호자와 피보호자가 현재 위치와 최근 7일 이동 기록을 볼 수 있습니다. 앱을 벗어나도 알림을 표시하며 위치를 수집합니다. 공유를 끄면 서버의 위치 기록이 삭제됩니다.\n\n기기 설정에 따라 위치 수집이 중단될 수 있습니다.") },
         confirmButton = { TextButton({ shareConfirm = false; onShare(true) }, enabled = !busy) { Text("동의하고 공유") } },
         dismissButton = { TextButton({ shareConfirm = false }) { Text("취소") } }
     )
@@ -362,8 +362,8 @@ private enum class HomePage { Map, Family, History, Safety, PlacePicker, Alerts,
     }
     if (own && !sharing) Button(enableSharing, Modifier.fillMaxWidth().heightIn(min = 48.dp), enabled = !busy && person != null) { Text("동의하고 위치 공유 시작") }
     if (emptyFamily) {
-        Text("아직 연결된 가족이 없어요. 역할별 초대 코드를 주고받아 연결해 보세요.", color = Muted, fontSize = 12.sp, lineHeight = 19.sp)
-        TextButton(connect, Modifier.fillMaxWidth()) { Text("가족 연결하기") }
+        Text("아직 가족 그룹에 다른 구성원이 없어요. 역할별 초대 코드를 주고받아 연결해 보세요.", color = Muted, fontSize = 12.sp, lineHeight = 19.sp)
+        TextButton(connect, Modifier.fillMaxWidth()) { Text("가족 초대·연결") }
     }
 }
 

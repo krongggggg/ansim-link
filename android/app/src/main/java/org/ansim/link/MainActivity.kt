@@ -112,7 +112,7 @@ class MainActivity : ComponentActivity() {
                                         act {
                                             api.request("PATCH", "/api/me/role", json("role" to role))
                                             refresh()
-                                            notice(if (role == "guardian") "보호자 역할로 설정했습니다. 연결된 가족의 공유 위치를 볼 수 있습니다." else "피보호자 역할로 설정했습니다. 보호자를 제외한 가족의 공유 위치를 볼 수 있습니다.")
+                                            notice(if (role == "guardian") "보호자 역할로 설정했습니다. 가족 그룹의 공유 위치를 볼 수 있습니다." else "피보호자 역할로 설정했습니다. 보호자를 제외한 가족 그룹의 공유 위치를 볼 수 있습니다.")
                                         }
                                     }
                                     else -> HomeScreen(loaded, busy, revokePending, SafetyService.running,
@@ -125,7 +125,7 @@ class MainActivity : ComponentActivity() {
                                             api.request("POST", "/api/invites/accept", json("code" to code))
                                             refresh()
                                             accepted()
-                                            notice("같은 역할의 가족 초대로 연결했습니다.")
+                                            notice("같은 역할의 초대로 가족 그룹에 연결했습니다.")
                                         } },
                                         onHistory = { id ->
                                             try { api.request("GET", "/api/locations/$id").array("locations") }
@@ -410,12 +410,12 @@ class MainActivity : ComponentActivity() {
         Text("기존 프로필은 업데이트 후 한 번만 역할을 정합니다. 역할은 위치 접근 권한을 결정하며 앱에서 다시 바꿀 수 없습니다.", color = Muted, lineHeight = 23.sp)
         SafetyCard {
             Text("피보호자", fontSize = 20.sp, fontWeight = FontWeight.Bold)
-            Text("내가 직접 동의하면 연결된 가족에게 현재 위치와 최근 이동 기록을 공유합니다. 다른 피보호자 위치는 볼 수 있지만 보호자 위치는 볼 수 없습니다.", color = Muted, lineHeight = 22.sp)
+            Text("내가 직접 동의하면 가족 그룹에 현재 위치와 최근 이동 기록을 공유합니다. 다른 피보호자 위치는 볼 수 있지만 보호자 위치는 볼 수 없습니다.", color = Muted, lineHeight = 22.sp)
             Button({ pending = "protected" }, enabled = !busy, modifier = Modifier.fillMaxWidth()) { Text("피보호자로 선택") }
         }
         SafetyCard {
             Text("보호자", fontSize = 20.sp, fontWeight = FontWeight.Bold)
-            Text("나와 연결된 보호자·피보호자의 공유 위치와 이동 기록을 모두 확인합니다. 내 위치를 공유하면 다른 보호자만 볼 수 있습니다.", color = Muted, lineHeight = 22.sp)
+            Text("가족 그룹의 보호자·피보호자가 공유한 위치와 이동 기록을 모두 확인합니다. 내 위치를 공유하면 그룹의 보호자만 볼 수 있습니다.", color = Muted, lineHeight = 22.sp)
             OutlinedButton({ pending = "guardian" }, enabled = !busy, modifier = Modifier.fillMaxWidth()) { Text("보호자로 선택") }
         }
         InfoStrip("역할을 잘못 선택하면 앱에서 변경할 수 없습니다. 프로필을 새로 만들려면 현재 프로필 삭제와 새 역할용 초대가 필요합니다.", Danger)

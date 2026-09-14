@@ -65,19 +65,19 @@ internal fun IncomingInvitationScreen(
                     Text("유효 시간: ${whenText(value.expiresAt)}", color = Muted)
                     if (hasSession) {
                         Text("현재 프로필의 역할이 $roleName 역할이면 이 가족과 연결할 수 있습니다.")
-                        InfoStrip("역할이 다르면 연결되지 않습니다. 보호자는 연결된 가족의 공유 위치를 모두 볼 수 있고, 피보호자는 보호자 위치를 볼 수 없습니다.", Violet)
+                        InfoStrip("초대를 수락하면 두 가족 그룹이 합쳐집니다. 보호자는 그룹의 공유 위치를 모두 볼 수 있고, 피보호자는 보호자 위치를 볼 수 없습니다.", Violet)
                     } else {
-                        Text(if (value.isSetup) "서버 운영자가 발급한 첫 기기용 보호자 초대입니다. 연결한 뒤 역할별로 가족을 초대할 수 있습니다." else "초대한 가족과 연결하고 이 기기에서 사용할 이름을 정합니다.")
+                        Text(if (value.isSetup) "서버 운영자가 발급한 첫 기기용 보호자 초대입니다. 연결한 뒤 역할별로 가족을 초대할 수 있습니다." else "초대한 가족의 그룹에 연결하고 이 기기에서 사용할 이름을 정합니다.")
                         OutlinedTextField(name, { name = it }, enabled = !busy, label = { Text("가족에게 보일 이름") }, singleLine = true, modifier = Modifier.fillMaxWidth())
                         Text("아래 버튼을 누르면 이 서버를 신뢰하고 $roleName 역할로 참여하는 데 동의합니다. 서버 운영자가 이름과 가족 연결 정보를 처리합니다.", color = Muted, fontSize = 13.sp)
-                        InfoStrip(if (value.role == "protected") "위치 공유는 꺼진 상태로 시작하며, 연결된 가족에게 공유하려면 나중에 별도로 동의해야 합니다." else "위치 공유는 꺼진 상태로 시작합니다. 공유하면 연결된 보호자만 볼 수 있습니다.", Violet)
+                        InfoStrip(if (value.role == "protected") "위치 공유는 꺼진 상태로 시작하며, 가족 그룹에 공유하려면 나중에 별도로 동의해야 합니다." else "위치 공유는 꺼진 상태로 시작합니다. 공유하면 가족 그룹의 보호자만 볼 수 있습니다.", Violet)
                     }
                 }
             }
             val message = acceptanceError ?: error ?: if (expired) "초대가 만료되었습니다. 초대한 가족에게 새 초대를 요청해 주세요." else null
             if (message != null) InfoStrip(message, Danger)
             if (message != null) {
-                Text(if (hasSession) "현재 프로필과 기존 가족 연결은 그대로 유지됩니다. 초대를 닫으면 가족 화면으로 돌아갑니다." else "초대와 연결 상태를 다시 확인해 주세요. 새 초대가 필요하면 가족이나 서버 운영자에게 요청해 주세요.", color = Muted, fontSize = 13.sp)
+                Text(if (hasSession) "현재 프로필과 기존 가족 그룹은 그대로 유지됩니다. 초대를 닫으면 가족 화면으로 돌아갑니다." else "초대와 연결 상태를 다시 확인해 주세요. 새 초대가 필요하면 가족이나 서버 운영자에게 요청해 주세요.", color = Muted, fontSize = 13.sp)
                 OutlinedButton({ attempt++ }, enabled = !loading && !busy, modifier = Modifier.fillMaxWidth()) { Text("초대 다시 확인") }
             }
             Button({ if (hasSession) connect() else join(name.trim()) }, enabled = preview != null && !expired && !loading && !busy && error == null && (!hasSession || preview?.isSetup == false) && (hasSession || name.trim().isNotEmpty()), modifier = Modifier.fillMaxWidth()) {

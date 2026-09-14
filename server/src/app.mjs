@@ -328,18 +328,27 @@ export function createApp({ dataDir = './data', now = Date.now, trustProxy = pro
     try { const result = work(); db.exec('COMMIT'); return result; }
     catch (error) { db.exec('ROLLBACK'); throw error; }
   };
-  const connected = (a, b) => {
-    const [first, second] = a < b ? [a, b] : [b, a];
-    return Boolean(sql('SELECT 1 FROM connections WHERE user_a=? AND user_b=?').get(first, second));
-  };
+  const connected = (a, b) => a !== b && Boolean(sql(`WITH RECURSIVE family(id) AS (
+    SELECT ? UNION
+    SELECT CASE WHEN c.user_a=family.id THEN c.user_b ELSE c.user_a END
+    FROM connections c JOIN family ON c.user_a=family.id OR c.user_b=family.id
+  ) SELECT 1 FROM family WHERE id=?`).get(a, b));
+  const connections = id => sql(`WITH RECURSIVE family(id) AS (
+    SELECT ? UNION
+    SELECT CASE WHEN c.user_a=family.id THEN c.user_b ELSE c.user_a END
+    FROM connections c JOIN family ON c.user_a=family.id OR c.user_b=family.id
+  )
+  SELECT u.*,EXISTS(SELECT 1 FROM connections d WHERE (d.user_a=? AND d.user_b=u.id) OR (d.user_b=? AND d.user_a=u.id)) AS directly_connected
+  FROM users u JOIN family ON family.id=u.id WHERE u.id<>? ORDER BY u.name,u.id`).all(id, id, id, id);
+  const connectionCount = id => connections(id).length;
+  const roleAllowsLocation = (viewer, target) => viewer.role !== null && target.role !== null &&
+    (viewer.role === 'guardian' || target.role === 'protected');
   const canViewLocation = (viewer, target) => viewer.id === target.id ||
-    (viewer.role !== null && target.role !== null && connected(viewer.id, target.id) && (viewer.role === 'guardian' || target.role === 'protected'));
+    (roleAllowsLocation(viewer, target) && connected(viewer.id, target.id));
   const safetyRecipients = actor => {
     const target = sql('SELECT id,role FROM users WHERE id=?').get(actor);
-    return target ? [actor, ...connections(actor).filter(viewer => canViewLocation(viewer, target)).map(viewer => viewer.id)] : [actor];
+    return target ? [actor, ...connections(actor).filter(viewer => roleAllowsLocation(viewer, target)).map(viewer => viewer.id)] : [actor];
   };
-  const connections = id => sql('SELECT u.* FROM users u JOIN connections c ON (c.user_a=? AND u.id=c.user_b) OR (c.user_b=? AND u.id=c.user_a) ORDER BY u.name,u.id').all(id, id);
-  const connectionCount = id => sql('SELECT COUNT(*) AS count FROM connections WHERE user_a=? OR user_b=?').get(id, id).count;
   const notify = (actor, type, title, body, recipients = null) => {
     const targets = recipients ?? safetyRecipients(actor);
     const at = now();
@@ -512,14 +521,14 @@ export function createApp({ dataDir = './data', now = Date.now, trustProxy = pro
         if (invite.user_id === null) {
           if (sql('SELECT 1 FROM users LIMIT 1').get()) fail(409, '첫 기기 설정 초대는 가족 참여자가 없을 때만 사용할 수 있습니다.');
         } else if (connectionCount(invite.user_id) >= 100) {
-          fail(409, '연결은 계정당 최대 100명까지 가능합니다.');
+          fail(409, '가족 그룹은 본인을 제외해 최대 100명까지 연결할 수 있습니다.');
         }
         const id = randomUUID();
         sql('INSERT INTO users(id,name,role,created_at) VALUES(?,?,?,?)').run(id, name, invite.role, now());
         if (invite.user_id !== null) {
           const [a, b] = id < invite.user_id ? [id, invite.user_id] : [invite.user_id, id];
           sql('INSERT INTO connections(user_a,user_b,created_at) VALUES(?,?,?)').run(a, b, now());
-          notify(id, 'connection_added', '가족 연결 완료', `${name}님과 연결되었습니다. 역할별 위치 권한과 위치 공유 동의는 별개입니다.`, [id, invite.user_id]);
+          notify(id, 'connection_added', '가족 연결 완료', `${name}님이 가족 그룹에 연결되었습니다. 역할별 위치 권한과 위치 공유 동의는 별개입니다.`, [id, ...connections(id).map(member => member.id)]);
         }
         sql('DELETE FROM invites WHERE code_hash=?').run(codeHash);
         return { token: newSession(id), user: userView(sql('SELECT * FROM users WHERE id=?').get(id)) };
@@ -532,25 +541,29 @@ export function createApp({ dataDir = './data', now = Date.now, trustProxy = pro
     const user = authenticate(req);
     rate(`user:${user.id}`, 180, MINUTE);
     if (method === 'GET' && path === '/api/state') {
-      const members = connections(user.id).map(member => {
-        const allowed = canViewLocation(user, member);
+      const family = connections(user.id);
+      const members = family.map(member => {
+        const allowed = roleAllowsLocation(user, member);
         return {
-          id: member.id, name: member.name, role: member.role ?? null, canViewLocation: allowed,
+          id: member.id, name: member.name, role: member.role ?? null, directlyConnected: Boolean(member.directly_connected), canViewLocation: allowed,
           sharing: allowed ? Boolean(member.sharing) : null,
           location: allowed && member.sharing ? locationView(latest(member.id)) : null,
           lastSeenAt: allowed && member.sharing ? iso(member.last_seen_at) : null
         };
       });
+      const locationUsers = [user.id, ...family.filter(member => member.sharing && roleAllowsLocation(user, member)).map(member => member.id)];
+      const safetyUsers = [user.id, ...family.filter(member => roleAllowsLocation(user, member)).map(member => member.id)];
+      const locationMarks = locationUsers.map(() => '?').join(',');
+      const safetyMarks = safetyUsers.map(() => '?').join(',');
       const journeys = sql(`SELECT j.*,u.name AS user_name FROM journeys j JOIN users u ON u.id=j.user_id
-        WHERE (u.id=? OR (u.sharing=1 AND u.role IS NOT NULL AND ? IS NOT NULL AND (?='guardian' OR u.role='protected')
-          AND EXISTS(SELECT 1 FROM connections c WHERE (c.user_a=? AND c.user_b=u.id) OR (c.user_b=? AND c.user_a=u.id))))
-        AND (j.created_at>=? OR j.status IN ('active','overdue')) ORDER BY (j.status IN ('active','overdue')) DESC,j.created_at DESC LIMIT 300`).all(user.id, user.role, user.role, user.id, user.id, now() - RETENTION).map(journeyView);
-      const sos = sql(`SELECT s.*,u.name AS user_name,u.role AS user_role FROM sos s JOIN users u ON u.id=s.user_id WHERE (s.status='active' OR s.resolved_at>=?)
-        AND (s.user_id=? OR (u.role IS NOT NULL AND ? IS NOT NULL AND (?='guardian' OR u.role='protected')
-          AND EXISTS(SELECT 1 FROM connections c WHERE (c.user_a=? AND c.user_b=s.user_id) OR (c.user_b=? AND c.user_a=s.user_id))))
-        ORDER BY (s.status='active') DESC,s.created_at DESC LIMIT 300`).all(now() - RETENTION, user.id, user.role, user.role, user.id, user.id).map(sosView);
+        WHERE j.user_id IN (${locationMarks}) AND (j.created_at>=? OR j.status IN ('active','overdue'))
+        ORDER BY (j.status IN ('active','overdue')) DESC,j.created_at DESC LIMIT 300`).all(...locationUsers, now() - RETENTION).map(journeyView);
+      const sos = sql(`SELECT s.*,u.name AS user_name,u.role AS user_role FROM sos s JOIN users u ON u.id=s.user_id
+        WHERE (s.status='active' OR s.resolved_at>=?) AND s.user_id IN (${safetyMarks})
+        ORDER BY (s.status='active') DESC,s.created_at DESC LIMIT 300`).all(now() - RETENTION, ...safetyUsers).map(sosView);
       const events = sql('SELECT e.id,e.type,e.title,e.body,e.actor_id,e.created_at,u.role AS actor_role FROM events e JOIN users u ON u.id=e.actor_id WHERE e.recipient_id=? AND e.created_at>=? ORDER BY e.id DESC LIMIT 100').all(user.id, now() - RETENTION)
-        .filter(event => event.actor_id === user.id || event.type === 'connection_added' || event.type === 'sos_ack' || canViewLocation(user, { id: event.actor_id, role: event.actor_role }))
+        .filter(event => event.actor_id === user.id || canViewLocation(user, { id: event.actor_id, role: event.actor_role }) ||
+          (['connection_added', 'sos_ack'].includes(event.type) && connected(user.id, event.actor_id)))
         .map(event => ({ id: event.id, type: event.type, title: event.title, body: event.body, actorId: event.actor_id, createdAt: iso(event.created_at) }));
       const ownSharing = user.role !== null && Boolean(user.sharing);
       return json(res, 200, { me: userView(user), members, zones: sql('SELECT * FROM zones WHERE user_id=? ORDER BY name,id').all(user.id).map(zoneView), journeys, events, sos, location: ownSharing ? locationView(latest(user.id)) : null, onboarding: { publicBaseUrl, apkAvailable: apkAvailable() } });
@@ -619,12 +632,12 @@ export function createApp({ dataDir = './data', now = Date.now, trustProxy = pro
         if (invite.user_id === user.id) fail(400, '자신의 초대 코드는 사용할 수 없습니다.');
         if (user.role === null) fail(409, '기존 프로필의 역할을 먼저 선택해 주세요.');
         if (user.role !== invite.role) fail(409, `이 초대는 ${invite.role === 'guardian' ? '보호자' : '피보호자'} 역할용입니다. 현재 프로필 역할과 같은 초대를 요청해 주세요.`);
-        if (connected(user.id, invite.user_id)) fail(409, '이미 연결된 사용자입니다.');
-        if (connectionCount(user.id) >= 100 || connectionCount(invite.user_id) >= 100) fail(409, '연결은 계정당 최대 100명까지 가능합니다.');
+        if (connected(user.id, invite.user_id)) fail(409, '이미 같은 가족 그룹에 참여하고 있습니다.');
+        if (connectionCount(user.id) + connectionCount(invite.user_id) + 1 > 100) fail(409, '가족 그룹은 본인을 제외해 최대 100명까지 연결할 수 있습니다.');
         const [a, b] = [user.id, invite.user_id].sort();
         sql('INSERT INTO connections(user_a,user_b,created_at) VALUES(?,?,?)').run(a, b, now());
         sql('DELETE FROM invites WHERE code_hash=?').run(codeHash);
-        notify(user.id, 'connection_added', '가족 연결 완료', `${user.name}님과 연결되었습니다. 역할별 위치 권한과 위치 공유 동의는 별개입니다.`, [user.id, invite.user_id]);
+        notify(user.id, 'connection_added', '가족 연결 완료', `${user.name}님이 가족 그룹에 연결되었습니다. 역할별 위치 권한과 위치 공유 동의는 별개입니다.`, [user.id, ...connections(user.id).map(member => member.id)]);
       });
       return json(res, 200, { ok: true });
     }
@@ -634,7 +647,7 @@ export function createApp({ dataDir = './data', now = Date.now, trustProxy = pro
       const member = match[1];
       transaction(() => {
         const [a, b] = [user.id, member].sort();
-        if (!sql('DELETE FROM connections WHERE user_a=? AND user_b=?').run(a, b).changes) fail(404, '연결된 사용자를 찾을 수 없습니다.');
+        if (!sql('DELETE FROM connections WHERE user_a=? AND user_b=?').run(a, b).changes) fail(404, '직접 연결된 사용자를 찾을 수 없습니다.');
         sql('DELETE FROM events WHERE (recipient_id=? AND actor_id=?) OR (recipient_id=? AND actor_id=?)').run(user.id, member, member, user.id);
         sql('DELETE FROM acknowledgements WHERE (user_id=? AND sos_id IN (SELECT id FROM sos WHERE user_id=?)) OR (user_id=? AND sos_id IN (SELECT id FROM sos WHERE user_id=?))').run(user.id, member, member, user.id);
       });
