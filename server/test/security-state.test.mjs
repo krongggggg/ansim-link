@@ -34,13 +34,13 @@ async function context(t, options = {}, initialize) {
     });
     return { status: response.status, body: await response.json() };
   };
-  const member = async name => {
+  const member = async (name, role = 'protected') => {
     const id = randomUUID();
     const token = randomBytes(32).toString('base64url');
     const db = new DatabaseSync(join(dataDir, 'ansim.sqlite'));
     try {
       db.exec('PRAGMA foreign_keys=ON');
-      db.prepare('INSERT INTO users(id,name,created_at) VALUES(?,?,?)').run(id, name, time);
+      db.prepare('INSERT INTO users(id,name,role,created_at) VALUES(?,?,?,?)').run(id, name, role, time);
       db.prepare('INSERT INTO sessions(token_hash,user_id,created_at) VALUES(?,?,?)')
         .run(createHash('sha256').update(token).digest('hex'), id, time);
     } finally { db.close(); }
@@ -86,6 +86,7 @@ test('first-device setup requires a current local invitation and has exactly one
   const preview = await c.request('GET', `/api/invites/${invitation.code}`);
   assert.equal(preview.body.isSetup, true);
   assert.equal(preview.body.inviterName, null);
+  assert.equal(preview.body.role, 'guardian');
   assert.equal(c.profileCount(), 0);
   assert.equal((await c.request('POST', '/api/invites/join', null, { code: invitation.code, name: ' ' })).status, 400);
   const results = await Promise.all(['first-phone', 'racing-phone'].map(name =>
@@ -94,6 +95,7 @@ test('first-device setup requires a current local invitation and has exactly one
   const joined = results.find(result => result.status === 201).body;
   const state = await c.state(joined);
   assert.equal(state.me.sharing, false);
+  assert.equal(state.me.role, 'guardian');
   assert.deepEqual(state.members, []);
   assert.equal(c.profileCount(), 1);
   assert.throws(() => c.setupInvite(), error => error.status === 409);
@@ -189,10 +191,16 @@ test('legacy migration preserves active device access and family data without re
     } finally { db.close(); }
   });
   const mine = await c.state(owner);
-  assert.deepEqual(mine.me, { id: 'legacy-a', name: '아빠', sharing: true, inactivityMinutes: 180 });
+  assert.deepEqual(mine.me, { id: 'legacy-a', name: '아빠', role: null, sharing: false, inactivityMinutes: 180 });
   assert.deepEqual(mine.zones, [{ id: 'old-zone', name: '집', latitude: 37, longitude: 127, radius: 150 }]);
-  const family = await c.state(relative);
-  assert.equal(family.members[0].id, 'legacy-a');
+  let family = await c.state(relative);
+  assert.deepEqual([family.members[0].role, family.members[0].canViewLocation, family.members[0].sharing, family.members[0].location], [null, false, null, null]);
+  assert.deepEqual(family.events, []);
+  assert.equal((await c.request('GET', `/api/invites/${code}`)).body.role, 'protected');
+  assert.equal((await c.request('PATCH', '/api/me/role', relative.token, { role: 'guardian' })).status, 200);
+  assert.equal((await c.request('PATCH', '/api/me/role', owner.token, { role: 'protected' })).status, 200);
+  assert.equal((await c.request('PATCH', '/api/me/role', owner.token, { role: 'guardian' })).status, 409);
+  family = await c.state(relative);
   assert.deepEqual(family.members[0].location, { latitude: 37, longitude: 127, accuracy: 5, recordedAt: new Date(c.now()).toISOString() });
   assert.equal(family.events[0].type, 'zone_enter');
   assert.equal((await c.request('GET', `/api/invites/${code}`)).body.inviterName, '아빠');
@@ -208,12 +216,53 @@ test('legacy migration preserves active device access and family data without re
   assert.deepEqual((await c.state(relative)).members, []);
 });
 
+test('version 2 storage migrates to unassigned roles without exposing legacy locations', async t => {
+  const account = { token: randomBytes(32).toString('base64url') };
+  const code = randomBytes(12).toString('base64url');
+  const digest = value => createHash('sha256').update(value).digest('hex');
+  const c = await context(t, { publicBaseUrl: 'https://family.example' }, (dataDir, time) => {
+    const db = new DatabaseSync(join(dataDir, 'ansim.sqlite'));
+    try {
+      db.exec(`
+        PRAGMA foreign_keys=ON;
+        CREATE TABLE users (
+          id TEXT PRIMARY KEY, name TEXT NOT NULL,
+          sharing INTEGER NOT NULL DEFAULT 0 CHECK(sharing IN (0,1)),
+          inactivity_minutes INTEGER NOT NULL DEFAULT 720 CHECK(inactivity_minutes BETWEEN 60 AND 4320),
+          created_at INTEGER NOT NULL, sharing_since INTEGER, last_seen_at INTEGER,
+          anchor_latitude REAL, anchor_longitude REAL, anchor_accuracy REAL, last_moved_at INTEGER,
+          inactivity_alerted INTEGER NOT NULL DEFAULT 0, offline_alerted INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE TABLE sessions (
+          token_hash TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          created_at INTEGER NOT NULL
+        );
+        CREATE TABLE invites (
+          code_hash TEXT PRIMARY KEY, user_id TEXT UNIQUE REFERENCES users(id) ON DELETE CASCADE,
+          expires_at INTEGER NOT NULL
+        );
+        PRAGMA user_version=2;
+      `);
+      db.prepare('INSERT INTO users(id,name,sharing,created_at,sharing_since,last_seen_at) VALUES(?,?,1,?,?,?)').run('v2-user', '기존 사용자', time - DAY, time - DAY, time);
+      db.prepare('INSERT INTO sessions VALUES(?,?,?)').run(digest(account.token), 'v2-user', time - DAY);
+      db.prepare('INSERT INTO invites VALUES(?,?,?)').run(digest(code), 'v2-user', time + MINUTE);
+    } finally { db.close(); }
+  });
+  const state = await c.state(account);
+  assert.deepEqual([state.me.role, state.me.sharing, state.location], [null, false, null]);
+  assert.equal((await c.request('GET', `/api/invites/${code}`)).body.role, 'protected');
+  assert.equal((await c.request('PATCH', '/api/me/role', account.token, { role: 'guardian' })).status, 200);
+  assert.deepEqual([(await c.state(account)).me.role, (await c.state(account)).me.sharing], ['guardian', false]);
+  await c.restart();
+  assert.equal((await c.state(account)).me.role, 'guardian');
+});
+
 test('mutual consent, single-use invitations, sharing erasure and revocation persist', async t => {
   const c = await context(t);
-  const owner = await c.member('owner');
-  const guardian = await c.member('guardian');
-  const stranger = await c.member('stranger');
-  const invitation = await c.request('POST', '/api/invites', owner.token, {});
+  const owner = await c.member('owner', 'protected');
+  const guardian = await c.member('guardian', 'guardian');
+  const stranger = await c.member('stranger', 'guardian');
+  const invitation = await c.request('POST', '/api/invites', owner.token, { role: 'guardian' });
   assert.equal((await c.request('POST', '/api/invites/accept', owner.token, { code: invitation.body.code })).status, 400);
   const attempts = await Promise.all([guardian, stranger].map(account => c.request('POST', '/api/invites/accept', account.token, { code: invitation.body.code })));
   assert.deepEqual(attempts.map(result => result.status).sort(), [200, 404]);
@@ -221,7 +270,7 @@ test('mutual consent, single-use invitations, sharing erasure and revocation per
   const unlinked = linked === guardian ? stranger : guardian;
   const connectedState = await c.state(owner);
   assert.equal(connectedState.me.sharing, false);
-  assert.deepEqual(connectedState.members.map(member => [member.id, member.sharing, member.location]), [[linked.user.id, false, null]]);
+  assert.deepEqual(connectedState.members.map(member => [member.id, member.role, member.canViewLocation, member.sharing, member.location]), [[linked.user.id, 'guardian', false, null, null]]);
   await c.share(owner);
   await c.fix(owner);
   assert.equal((await c.state(linked)).members[0].location.latitude, 37);
@@ -237,6 +286,7 @@ test('mutual consent, single-use invitations, sharing erasure and revocation per
   assert.equal((await c.request('POST', `/api/sos/${sos.body.sos.id}/ack`, linked.token, {})).status, 200);
   assert.equal((await c.request('POST', `/api/sos/${sos.body.sos.id}/ack`, linked.token, {})).status, 200);
   assert.equal((await c.state(owner)).sos[0].acknowledgedBy.length, 1);
+  assert.equal((await c.state(owner)).events.some(event => event.type === 'sos_ack'), true);
   assert.equal((await c.request('POST', `/api/sos/${sos.body.sos.id}/media`, owner.token, { mime: 'image/jpeg', data: Buffer.from('not an image').toString('base64') })).status, 415);
   assert.equal((await c.request('PATCH', '/api/me', owner.token, { sharing: false })).status, 200);
   const afterOff = await c.state(linked);
@@ -255,6 +305,63 @@ test('mutual consent, single-use invitations, sharing erasure and revocation per
   assert.equal((await c.request('DELETE', '/api/me', owner.token, { confirmName: 'wrong-name' })).status, 403);
   assert.equal((await c.request('DELETE', '/api/me', owner.token, { confirmName: owner.user.name })).status, 200);
   assert.equal((await c.request('GET', '/api/state', owner.token)).status, 401);
+});
+
+test('role matrix exposes protected locations only to connected guardians', async t => {
+  const c = await context(t);
+  const child = await c.member('피보호자', 'protected');
+  const guardian = await c.member('보호자', 'guardian');
+  const protectedPeer = await c.member('다른 피보호자', 'protected');
+  const guardianPeer = await c.member('다른 보호자', 'guardian');
+
+  const guardianInvite = (await c.request('POST', '/api/invites', child.token, { role: 'guardian' })).body;
+  assert.equal(guardianInvite.role, 'guardian');
+  assert.equal((await c.request('POST', '/api/invites/accept', protectedPeer.token, { code: guardianInvite.code })).status, 409);
+  assert.equal((await c.request('POST', '/api/invites/accept', guardian.token, { code: guardianInvite.code })).status, 200);
+  const protectedInvite = (await c.request('POST', '/api/invites', child.token, { role: 'protected' })).body;
+  assert.equal((await c.request('POST', '/api/invites/accept', protectedPeer.token, { code: protectedInvite.code })).status, 200);
+  const peerInvite = (await c.request('POST', '/api/invites', guardian.token, { role: 'guardian' })).body;
+  assert.equal((await c.request('POST', '/api/invites/accept', guardianPeer.token, { code: peerInvite.code })).status, 200);
+
+  await c.share(child);
+  await c.fix(child);
+  const journey = await c.request('POST', '/api/journeys', child.token, { destination: '학교', latitude: 37.1, longitude: 127, radius: 100, deadline: new Date(c.now() + 60 * MINUTE).toISOString() });
+  assert.equal(journey.status, 201);
+  const childSos = await c.request('POST', '/api/sos', child.token, { message: '도움 요청', latitude: 37, longitude: 127 });
+  assert.equal(childSos.status, 201);
+
+  const guardianState = await c.state(guardian);
+  const visibleChild = guardianState.members.find(member => member.id === child.user.id);
+  assert.deepEqual([visibleChild.role, visibleChild.canViewLocation, visibleChild.sharing, visibleChild.location.latitude], ['protected', true, true, 37]);
+  assert.equal(guardianState.journeys.some(item => item.userId === child.user.id), true);
+  assert.equal(guardianState.sos.some(item => item.id === childSos.body.sos.id), true);
+  assert.equal((await c.request('GET', `/api/locations/${child.user.id}`, guardian.token)).status, 200);
+
+  const childState = await c.state(child);
+  const hiddenGuardian = childState.members.find(member => member.id === guardian.user.id);
+  assert.deepEqual([hiddenGuardian.role, hiddenGuardian.canViewLocation, hiddenGuardian.sharing, hiddenGuardian.location], ['guardian', false, null, null]);
+  assert.equal((await c.request('GET', `/api/locations/${guardian.user.id}`, child.token)).status, 404);
+  assert.equal((await c.request('PATCH', '/api/me', guardian.token, { sharing: true })).status, 403);
+  assert.equal((await c.request('POST', '/api/locations', guardian.token, { latitude: 38, longitude: 128, accuracy: 5, recordedAt: new Date(c.now()).toISOString() })).status, 403);
+  assert.equal((await c.request('POST', '/api/zones', guardian.token, { name: '보호자 구역', latitude: 38, longitude: 128, radius: 100 })).status, 403);
+  assert.equal((await c.request('POST', '/api/journeys', guardian.token, { destination: '보호자 목적지', latitude: 38, longitude: 128, radius: 100, deadline: new Date(c.now() + 60 * MINUTE).toISOString() })).status, 403);
+
+  const parentSos = await c.request('POST', '/api/sos', guardian.token, { message: '보호자 도움 요청', latitude: 38, longitude: 128 });
+  assert.equal(parentSos.status, 201);
+  assert.equal((await c.state(child)).sos.some(item => item.id === parentSos.body.sos.id), false);
+  assert.equal((await c.request('POST', `/api/sos/${parentSos.body.sos.id}/ack`, child.token, {})).status, 404);
+
+  const protectedState = await c.state(protectedPeer);
+  const hiddenProtected = protectedState.members.find(member => member.id === child.user.id);
+  assert.deepEqual([hiddenProtected.canViewLocation, hiddenProtected.sharing, hiddenProtected.location], [false, null, null]);
+  assert.equal(protectedState.journeys.some(item => item.userId === child.user.id), false);
+  assert.equal(protectedState.sos.some(item => item.id === childSos.body.sos.id), false);
+  assert.equal((await c.request('GET', `/api/locations/${child.user.id}`, protectedPeer.token)).status, 404);
+
+  const guardianPeerState = await c.state(guardianPeer);
+  const hiddenGuardianPeer = guardianPeerState.members.find(member => member.id === guardian.user.id);
+  assert.deepEqual([hiddenGuardianPeer.canViewLocation, hiddenGuardianPeer.sharing, hiddenGuardianPeer.location], [false, null, null]);
+  assert.equal((await c.request('GET', `/api/locations/${guardian.user.id}`, guardianPeer.token)).status, 404);
 });
 
 test('public invitation previews are origin-bound, escaped and read-only until explicit acceptance', async t => {
@@ -278,7 +385,7 @@ test('public invitation previews are origin-bound, escaped and read-only until e
     assert.equal(response.status, 200);
     assert.equal(response.headers.get('cache-control'), 'no-store');
     if (method === 'HEAD') assert.equal(await response.text(), '');
-    else assert.deepEqual(await response.json(), { inviterName: name, isSetup: false, expiresAt: invite.expiresAt, serverUrl: 'https://family.example' });
+    else assert.deepEqual(await response.json(), { inviterName: name, isSetup: false, role: 'protected', expiresAt: invite.expiresAt, serverUrl: 'https://family.example' });
   }
   const pagePath = `/invite/${invite.code}`;
   const page = await c.raw(pagePath, { headers: { Authorization: `Bearer ${owner.token}`, Host: 'attacker.example' } });
@@ -287,6 +394,7 @@ test('public invitation previews are origin-bound, escaped and read-only until e
   assert.match(page.headers.get('content-security-policy'), /default-src 'none'/u);
   const html = await page.text();
   assert.ok(html.includes('&lt;img src=x onerror=&quot;alert(1)&quot;&gt;&amp;가족'));
+  assert.ok(html.includes('초대 역할: 피보호자'));
   assert.ok(!html.includes('<img'));
   assert.ok(!html.includes('<script'));
   assert.ok(!html.includes(owner.token));
@@ -475,9 +583,9 @@ test('stationary evidence must be recent and continuous; offline is a separate e
 
 test('expired invitations and deleted device credentials stay revoked while active devices remain signed in', async t => {
   const c = await context(t);
-  const owner = await c.member('expiry-owner');
-  const guardian = await c.member('expiry-guardian');
-  const invitation = await c.request('POST', '/api/invites', owner.token, {});
+  const owner = await c.member('expiry-owner', 'protected');
+  const guardian = await c.member('expiry-guardian', 'guardian');
+  const invitation = await c.request('POST', '/api/invites', owner.token, { role: 'guardian' });
   c.advance(10 * MINUTE);
   assert.equal((await c.request('POST', '/api/invites/accept', guardian.token, { code: invitation.body.code })).status, 404);
   assert.equal((await c.request('DELETE', '/api/me', guardian.token, { confirmName: guardian.user.name })).status, 200);
@@ -491,9 +599,9 @@ test('expired invitations and deleted device credentials stay revoked while acti
 
 test('unresolved SOS remains visible until resolved, then expires seven days after resolution', async t => {
   const c = await context(t);
-  const owner = await c.member('retention-owner');
-  const guardian = await c.member('retention-guardian');
-  const invite = await c.request('POST', '/api/invites', owner.token, {});
+  const owner = await c.member('retention-owner', 'protected');
+  const guardian = await c.member('retention-guardian', 'guardian');
+  const invite = await c.request('POST', '/api/invites', owner.token, { role: 'guardian' });
   await c.request('POST', '/api/invites/accept', guardian.token, { code: invite.body.code });
   const created = await c.request('POST', '/api/sos', owner.token, { message: '아직 도움이 필요합니다.' });
   assert.equal(created.status, 201);

@@ -14,7 +14,7 @@ const MEDIA_LIMIT = 5 * 1024 * 1024;
 const ENCODED_LIMIT = Math.ceil(MEDIA_LIMIT / 3) * 4;
 const hash = value => createHash('sha256').update(value).digest('hex');
 const iso = value => value == null ? null : new Date(value).toISOString();
-const userView = row => ({ id: row.id, name: row.name, sharing: Boolean(row.sharing), inactivityMinutes: row.inactivity_minutes });
+const userView = row => ({ id: row.id, name: row.name, role: row.role ?? null, sharing: row.role === 'protected' && Boolean(row.sharing), inactivityMinutes: row.inactivity_minutes });
 const locationView = row => row ? ({ latitude: row.latitude, longitude: row.longitude, accuracy: row.accuracy, recordedAt: iso(row.recorded_at) }) : null;
 const zoneView = row => ({ id: row.id, name: row.name, latitude: row.latitude, longitude: row.longitude, radius: row.radius });
 const journeyView = row => ({ id: row.id, userId: row.user_id, userName: row.user_name, destination: row.destination, latitude: row.latitude, longitude: row.longitude, radius: row.radius, deadline: iso(row.deadline), status: row.status, createdAt: iso(row.created_at) });
@@ -30,6 +30,10 @@ function text(value, field, min, max) {
 }
 function invitationCode(value) {
   if (typeof value !== 'string' || !/^[A-Za-z0-9_-]{16}$/u.test(value)) fail(400, '초대 코드 형식을 확인해 주세요.');
+  return value;
+}
+function userRole(value, field = '역할') {
+  if (value !== 'guardian' && value !== 'protected') fail(400, `${field}을 확인해 주세요.`);
   return value;
 }
 function number(value, field, min, max) {
@@ -143,6 +147,7 @@ function decodeMedia(body) {
 
 const USER_COLUMNS = `
   id TEXT PRIMARY KEY, name TEXT NOT NULL,
+  role TEXT CHECK(role IN ('guardian','protected')),
   sharing INTEGER NOT NULL DEFAULT 0 CHECK(sharing IN (0,1)),
   inactivity_minutes INTEGER NOT NULL DEFAULT 720 CHECK(inactivity_minutes BETWEEN 60 AND 4320),
   created_at INTEGER NOT NULL, sharing_since INTEGER, last_seen_at INTEGER,
@@ -155,6 +160,7 @@ const SESSION_COLUMNS = `
 `;
 const INVITE_COLUMNS = `
   code_hash TEXT PRIMARY KEY, user_id TEXT UNIQUE REFERENCES users(id) ON DELETE CASCADE,
+  role TEXT NOT NULL CHECK(role IN ('guardian','protected')),
   expires_at INTEGER NOT NULL
 `;
 const SCHEMA = `
@@ -221,8 +227,8 @@ function initializeDatabase(db, now) {
   // references. SQLite requires disabling foreign keys before the transaction.
   db.exec('PRAGMA foreign_keys=OFF; BEGIN IMMEDIATE;');
   try {
-    const version = db.prepare('PRAGMA user_version').get().user_version;
-    if (version > 2) throw new Error('지원하지 않는 데이터베이스 버전입니다.');
+    let version = db.prepare('PRAGMA user_version').get().user_version;
+    if (version > 3) throw new Error('지원하지 않는 데이터베이스 버전입니다.');
     if (version === 0 && db.prepare("SELECT 1 FROM sqlite_schema WHERE type='table' AND name NOT LIKE 'sqlite_%'").get()) {
       throw new Error('버전 정보가 없는 기존 데이터베이스는 자동으로 변경할 수 없습니다.');
     }
@@ -233,7 +239,7 @@ function initializeDatabase(db, now) {
           SELECT id,name,sharing,inactivity_minutes,created_at,sharing_since,last_seen_at,anchor_latitude,anchor_longitude,anchor_accuracy,last_moved_at,inactivity_alerted,offline_alerted FROM users;
         CREATE TABLE sessions_v2 (${SESSION_COLUMNS});
         CREATE TABLE invites_v2 (${INVITE_COLUMNS});
-        INSERT INTO invites_v2(code_hash,user_id,expires_at) SELECT code_hash,user_id,expires_at FROM invites;
+        INSERT INTO invites_v2(code_hash,user_id,role,expires_at) SELECT code_hash,user_id,'protected',expires_at FROM invites;
       `);
       // Never turn an already-expired login into a persistent device credential.
       db.prepare('INSERT INTO sessions_v2(token_hash,user_id,created_at) SELECT token_hash,user_id,created_at FROM sessions WHERE expires_at>?').run(now());
@@ -245,10 +251,19 @@ function initializeDatabase(db, now) {
         ALTER TABLE sessions_v2 RENAME TO sessions;
         ALTER TABLE invites_v2 RENAME TO invites;
       `);
+      version = 3;
+    }
+    if (version === 2) {
+      db.exec(`
+        ALTER TABLE users ADD COLUMN role TEXT CHECK(role IN ('guardian','protected'));
+        ALTER TABLE invites ADD COLUMN role TEXT NOT NULL DEFAULT 'protected' CHECK(role IN ('guardian','protected'));
+        UPDATE invites SET role='guardian' WHERE user_id IS NULL;
+      `);
+      version = 3;
     }
     db.exec(SCHEMA);
     if (db.prepare('PRAGMA foreign_key_check').get()) throw new Error('데이터베이스 참조 무결성 확인에 실패했습니다.');
-    db.exec('PRAGMA user_version=2; COMMIT;');
+    db.exec('PRAGMA user_version=3; COMMIT;');
   } catch (error) {
     db.exec('ROLLBACK');
     throw error;
@@ -317,23 +332,29 @@ export function createApp({ dataDir = './data', now = Date.now, trustProxy = pro
     const [first, second] = a < b ? [a, b] : [b, a];
     return Boolean(sql('SELECT 1 FROM connections WHERE user_a=? AND user_b=?').get(first, second));
   };
+  const canViewLocation = (viewer, target) => viewer.id === target.id ||
+    (viewer.role === 'guardian' && target.role === 'protected' && connected(viewer.id, target.id));
+  const safetyRecipients = actor => {
+    const target = sql('SELECT id,role FROM users WHERE id=?').get(actor);
+    return target ? [actor, ...connections(actor).filter(viewer => canViewLocation(viewer, target)).map(viewer => viewer.id)] : [actor];
+  };
   const connections = id => sql('SELECT u.* FROM users u JOIN connections c ON (c.user_a=? AND u.id=c.user_b) OR (c.user_b=? AND u.id=c.user_a) ORDER BY u.name,u.id').all(id, id);
   const connectionCount = id => sql('SELECT COUNT(*) AS count FROM connections WHERE user_a=? OR user_b=?').get(id, id).count;
   const notify = (actor, type, title, body, recipients = null) => {
-    const targets = recipients ?? [actor, ...connections(actor).map(row => row.id)];
+    const targets = recipients ?? safetyRecipients(actor);
     const at = now();
     for (const recipient of new Set(targets)) sql('INSERT INTO events(recipient_id,actor_id,type,title,body,created_at) VALUES(?,?,?,?,?,?)').run(recipient, actor, type, title, body, at);
   };
   const latest = id => sql('SELECT latitude,longitude,accuracy,recorded_at FROM locations WHERE user_id=? AND recorded_at>=? ORDER BY recorded_at DESC LIMIT 1').get(id, now() - RETENTION);
   const getJourney = id => sql('SELECT j.*,u.name AS user_name FROM journeys j JOIN users u ON u.id=j.user_id WHERE j.id=?').get(id);
-  const getSos = id => sql('SELECT s.*,u.name AS user_name FROM sos s JOIN users u ON u.id=s.user_id WHERE s.id=?').get(id);
+  const getSos = id => sql('SELECT s.*,u.name AS user_name,u.role AS user_role FROM sos s JOIN users u ON u.id=s.user_id WHERE s.id=?').get(id);
   const sosView = row => ({
     id: row.id, userId: row.user_id, userName: row.user_name, message: row.message,
     latitude: row.latitude, longitude: row.longitude, status: row.status, createdAt: iso(row.created_at),
     acknowledgedBy: sql('SELECT u.id,u.name FROM acknowledgements a JOIN users u ON u.id=a.user_id WHERE a.sos_id=? ORDER BY a.created_at,u.id').all(row.id).map(user => ({ id: user.id, name: user.name })),
     media: sql('SELECT id,mime FROM media WHERE sos_id=? ORDER BY created_at,id').all(row.id).map(item => ({ id: item.id, mime: item.mime }))
   });
-  const canAccessSos = (user, sos) => sos && (sos.user_id === user.id || connected(user.id, sos.user_id));
+  const canAccessSos = (user, sos) => sos && canViewLocation(user, { id: sos.user_id, role: sos.user_role });
   const mediaPath = id => join(mediaDir, id);
   const collectMedia = () => {
     for (const row of sql('SELECT id FROM media_gc LIMIT 1000').all()) {
@@ -373,8 +394,8 @@ export function createApp({ dataDir = './data', now = Date.now, trustProxy = pro
     sql('INSERT INTO sessions(token_hash,user_id,created_at) VALUES(?,?,?)').run(hash(token), id, now());
     return token;
   };
-  const inviteView = (code, expiresAt) => ({
-    code, expiresAt: iso(expiresAt),
+  const inviteView = (code, expiresAt, role) => ({
+    code, role, expiresAt: iso(expiresAt),
     inviteUrl: publicBaseUrl ? `${publicBaseUrl}/invite/${encodeURIComponent(code)}` : null,
     apkAvailable: apkAvailable()
   });
@@ -383,8 +404,8 @@ export function createApp({ dataDir = './data', now = Date.now, trustProxy = pro
     const code = randomBytes(12).toString('base64url');
     const expiresAt = now() + 10 * MINUTE;
     sql('DELETE FROM invites WHERE user_id IS NULL').run();
-    sql('INSERT INTO invites(code_hash,user_id,expires_at) VALUES(?,NULL,?)').run(hash(code), expiresAt);
-    return inviteView(code, expiresAt);
+    sql("INSERT INTO invites(code_hash,user_id,role,expires_at) VALUES(?,NULL,'guardian',?)").run(hash(code), expiresAt);
+    return inviteView(code, expiresAt, 'guardian');
   });
 
   function sweep() {
@@ -472,11 +493,11 @@ export function createApp({ dataDir = './data', now = Date.now, trustProxy = pro
       res.setHeader('X-Robots-Tag', 'noindex, nofollow');
       const code = (preview || landing)[1];
       const invite = /^[A-Za-z0-9_-]{16}$/u.test(code)
-        ? sql('SELECT u.name AS inviter_name,i.user_id,i.expires_at FROM invites i LEFT JOIN users u ON u.id=i.user_id WHERE i.code_hash=? AND i.expires_at>? AND (i.user_id IS NOT NULL OR NOT EXISTS(SELECT 1 FROM users))').get(hash(code), now())
+        ? sql('SELECT u.name AS inviter_name,i.user_id,i.role,i.expires_at FROM invites i LEFT JOIN users u ON u.id=i.user_id WHERE i.code_hash=? AND i.expires_at>? AND (i.user_id IS NOT NULL OR NOT EXISTS(SELECT 1 FROM users))').get(hash(code), now())
         : null;
       if (!invite) fail(404, '초대가 없거나 만료되었거나 이미 사용되었습니다. 초대한 가족에게 새 초대를 요청해 주세요.');
       if (!publicBaseUrl) fail(503, '서버의 공개 초대 주소가 아직 설정되지 않았습니다. 서버 운영자에게 문의하거나 앱에서 초대 코드를 직접 입력해 주세요.');
-      if (preview) return json(res, 200, { inviterName: invite.inviter_name, isSetup: invite.user_id === null, expiresAt: iso(invite.expires_at), serverUrl: publicBaseUrl });
+      if (preview) return json(res, 200, { inviterName: invite.inviter_name, isSetup: invite.user_id === null, role: invite.role, expiresAt: iso(invite.expires_at), serverUrl: publicBaseUrl });
       return html(req, res, 200, { invite, code, publicBaseUrl, apkAvailable: apkAvailable() });
     }
     if (method === 'POST' && path === '/api/invites/join') {
@@ -494,11 +515,11 @@ export function createApp({ dataDir = './data', now = Date.now, trustProxy = pro
           fail(409, '연결은 계정당 최대 100명까지 가능합니다.');
         }
         const id = randomUUID();
-        sql('INSERT INTO users(id,name,created_at) VALUES(?,?,?)').run(id, name, now());
+        sql('INSERT INTO users(id,name,role,created_at) VALUES(?,?,?,?)').run(id, name, invite.role, now());
         if (invite.user_id !== null) {
           const [a, b] = id < invite.user_id ? [id, invite.user_id] : [invite.user_id, id];
           sql('INSERT INTO connections(user_a,user_b,created_at) VALUES(?,?,?)').run(a, b, now());
-          notify(id, 'connection_added', '가족 연결 완료', `${name}님과 연결되었습니다. 위치 공유는 각자가 직접 켜야 합니다.`, [id, invite.user_id]);
+          notify(id, 'connection_added', '가족 연결 완료', `${name}님과 연결되었습니다. 역할별 위치 권한과 위치 공유 동의는 별개입니다.`, [id, invite.user_id]);
         }
         sql('DELETE FROM invites WHERE code_hash=?').run(codeHash);
         return { token: newSession(id), user: userView(sql('SELECT * FROM users WHERE id=?').get(id)) };
@@ -511,20 +532,47 @@ export function createApp({ dataDir = './data', now = Date.now, trustProxy = pro
     const user = authenticate(req);
     rate(`user:${user.id}`, 180, MINUTE);
     if (method === 'GET' && path === '/api/state') {
-      const members = connections(user.id).map(member => ({ id: member.id, name: member.name, sharing: Boolean(member.sharing), location: member.sharing ? locationView(latest(member.id)) : null, lastSeenAt: member.sharing ? iso(member.last_seen_at) : null }));
+      const members = connections(user.id).map(member => {
+        const allowed = canViewLocation(user, member);
+        return {
+          id: member.id, name: member.name, role: member.role ?? null, canViewLocation: allowed,
+          sharing: allowed ? Boolean(member.sharing) : null,
+          location: allowed && member.sharing ? locationView(latest(member.id)) : null,
+          lastSeenAt: allowed && member.sharing ? iso(member.last_seen_at) : null
+        };
+      });
       const journeys = sql(`SELECT j.*,u.name AS user_name FROM journeys j JOIN users u ON u.id=j.user_id
-        WHERE (u.id=? OR (u.sharing=1 AND EXISTS(SELECT 1 FROM connections c WHERE (c.user_a=? AND c.user_b=u.id) OR (c.user_b=? AND c.user_a=u.id))))
-        AND (j.created_at>=? OR j.status IN ('active','overdue')) ORDER BY (j.status IN ('active','overdue')) DESC,j.created_at DESC LIMIT 300`).all(user.id, user.id, user.id, now() - RETENTION).map(journeyView);
-      const sos = sql(`SELECT s.*,u.name AS user_name FROM sos s JOIN users u ON u.id=s.user_id WHERE (s.status='active' OR s.resolved_at>=?)
-        AND (s.user_id=? OR EXISTS(SELECT 1 FROM connections c WHERE (c.user_a=? AND c.user_b=s.user_id) OR (c.user_b=? AND c.user_a=s.user_id)))
-        ORDER BY (s.status='active') DESC,s.created_at DESC LIMIT 300`).all(now() - RETENTION, user.id, user.id, user.id).map(sosView);
-      const events = sql('SELECT id,type,title,body,actor_id,created_at FROM events WHERE recipient_id=? AND created_at>=? ORDER BY id DESC LIMIT 100').all(user.id, now() - RETENTION).map(event => ({ id: event.id, type: event.type, title: event.title, body: event.body, actorId: event.actor_id, createdAt: iso(event.created_at) }));
-      return json(res, 200, { me: userView(user), members, zones: sql('SELECT * FROM zones WHERE user_id=? ORDER BY name,id').all(user.id).map(zoneView), journeys, events, sos, location: user.sharing ? locationView(latest(user.id)) : null, onboarding: { publicBaseUrl, apkAvailable: apkAvailable() } });
+        WHERE (u.id=? OR (?='guardian' AND u.role='protected' AND u.sharing=1 AND EXISTS(SELECT 1 FROM connections c WHERE (c.user_a=? AND c.user_b=u.id) OR (c.user_b=? AND c.user_a=u.id))))
+        AND (j.created_at>=? OR j.status IN ('active','overdue')) ORDER BY (j.status IN ('active','overdue')) DESC,j.created_at DESC LIMIT 300`).all(user.id, user.role, user.id, user.id, now() - RETENTION).map(journeyView);
+      const sos = sql(`SELECT s.*,u.name AS user_name,u.role AS user_role FROM sos s JOIN users u ON u.id=s.user_id WHERE (s.status='active' OR s.resolved_at>=?)
+        AND (s.user_id=? OR (?='guardian' AND u.role='protected' AND EXISTS(SELECT 1 FROM connections c WHERE (c.user_a=? AND c.user_b=s.user_id) OR (c.user_b=? AND c.user_a=s.user_id))))
+        ORDER BY (s.status='active') DESC,s.created_at DESC LIMIT 300`).all(now() - RETENTION, user.id, user.role, user.id, user.id).map(sosView);
+      const events = sql('SELECT e.id,e.type,e.title,e.body,e.actor_id,e.created_at,u.role AS actor_role FROM events e JOIN users u ON u.id=e.actor_id WHERE e.recipient_id=? AND e.created_at>=? ORDER BY e.id DESC LIMIT 100').all(user.id, now() - RETENTION)
+        .filter(event => event.actor_id === user.id || event.type === 'connection_added' || event.type === 'sos_ack' || canViewLocation(user, { id: event.actor_id, role: event.actor_role }))
+        .map(event => ({ id: event.id, type: event.type, title: event.title, body: event.body, actorId: event.actor_id, createdAt: iso(event.created_at) }));
+      const ownSharing = user.role === 'protected' && Boolean(user.sharing);
+      return json(res, 200, { me: userView(user), members, zones: sql('SELECT * FROM zones WHERE user_id=? ORDER BY name,id').all(user.id).map(zoneView), journeys, events, sos, location: ownSharing ? locationView(latest(user.id)) : null, onboarding: { publicBaseUrl, apkAvailable: apkAvailable() } });
+    }
+    if (method === 'PATCH' && path === '/api/me/role') {
+      fields(body, ['role']);
+      const role = userRole(body.role);
+      transaction(() => {
+        if (sql('SELECT role FROM users WHERE id=?').get(user.id).role !== null) fail(409, '역할은 한 번 정하면 앱에서 변경할 수 없습니다.');
+        sql('UPDATE users SET role=? WHERE id=? AND role IS NULL').run(role, user.id);
+        if (role === 'guardian') {
+          sql('UPDATE users SET sharing=0,sharing_since=NULL,last_seen_at=NULL,anchor_latitude=NULL,anchor_longitude=NULL,anchor_accuracy=NULL,last_moved_at=NULL,inactivity_alerted=0,offline_alerted=0 WHERE id=?').run(user.id);
+          sql('DELETE FROM locations WHERE user_id=?').run(user.id);
+          sql("UPDATE journeys SET status='cancelled',finished_at=? WHERE user_id=? AND status IN ('active','overdue')").run(now(), user.id);
+          sql('UPDATE zones SET state=NULL WHERE user_id=?').run(user.id);
+        }
+      });
+      return json(res, 200, { user: userView(sql('SELECT * FROM users WHERE id=?').get(user.id)) });
     }
     if (method === 'PATCH' && path === '/api/me') {
       fields(body, ['name', 'sharing', 'inactivityMinutes']);
       const name = body.name === undefined ? user.name : text(body.name, '이름', 1, 60);
       if (body.sharing !== undefined && typeof body.sharing !== 'boolean') fail(400, '위치 공유 설정을 확인해 주세요.');
+      if (body.sharing === true && user.role !== 'protected') fail(403, '피보호자 역할만 자신의 위치 공유를 켤 수 있습니다.');
       const sharing = body.sharing === undefined ? user.sharing : Number(body.sharing);
       const inactivity = body.inactivityMinutes === undefined ? user.inactivity_minutes : number(body.inactivityMinutes, '알림 시간', 60, 4320);
       if (!Number.isInteger(inactivity)) fail(400, '알림 시간은 정수 분으로 입력해 주세요.');
@@ -536,7 +584,7 @@ export function createApp({ dataDir = './data', now = Date.now, trustProxy = pro
           if (!sharing) {
             sql('DELETE FROM locations WHERE user_id=?').run(user.id);
             sql("UPDATE journeys SET status='cancelled',finished_at=? WHERE user_id=? AND status IN ('active','overdue')").run(now(), user.id);
-            notify(user.id, 'sharing_off', '위치 공유 중지', `${name}님이 위치 공유를 중지했습니다. 저장된 위치 기록이 삭제되었습니다.`, connections(user.id).map(member => member.id));
+            notify(user.id, 'sharing_off', '위치 공유 중지', `${name}님이 위치 공유를 중지했습니다. 저장된 위치 기록이 삭제되었습니다.`);
           }
         }
       });
@@ -557,12 +605,13 @@ export function createApp({ dataDir = './data', now = Date.now, trustProxy = pro
       return json(res, 200, { ok: true });
     }
     if (method === 'POST' && path === '/api/invites') {
-      fields(body, []);
+      fields(body, ['role']);
       rate(`invite:${user.id}`, 10, 60 * MINUTE);
+      const role = body.role === undefined ? 'protected' : userRole(body.role, '초대 역할');
       const code = randomBytes(12).toString('base64url');
       const expiresAt = now() + 10 * MINUTE;
-      sql('INSERT INTO invites(code_hash,user_id,expires_at) VALUES(?,?,?) ON CONFLICT(user_id) DO UPDATE SET code_hash=excluded.code_hash,expires_at=excluded.expires_at').run(hash(code), user.id, expiresAt);
-      return json(res, 201, inviteView(code, expiresAt));
+      sql('INSERT INTO invites(code_hash,user_id,role,expires_at) VALUES(?,?,?,?) ON CONFLICT(user_id) DO UPDATE SET code_hash=excluded.code_hash,role=excluded.role,expires_at=excluded.expires_at').run(hash(code), user.id, role, expiresAt);
+      return json(res, 201, inviteView(code, expiresAt, role));
     }
     if (method === 'POST' && path === '/api/invites/accept') {
       fields(body, ['code']);
@@ -572,12 +621,14 @@ export function createApp({ dataDir = './data', now = Date.now, trustProxy = pro
         const invite = sql('SELECT * FROM invites WHERE code_hash=? AND expires_at>? AND user_id IS NOT NULL').get(codeHash, now());
         if (!invite) fail(404, '초대 코드가 없거나 만료되었거나 이미 사용되었습니다.');
         if (invite.user_id === user.id) fail(400, '자신의 초대 코드는 사용할 수 없습니다.');
+        if (user.role === null) fail(409, '기존 프로필의 역할을 먼저 선택해 주세요.');
+        if (user.role !== invite.role) fail(409, `이 초대는 ${invite.role === 'guardian' ? '보호자' : '피보호자'} 역할용입니다. 현재 프로필 역할과 같은 초대를 요청해 주세요.`);
         if (connected(user.id, invite.user_id)) fail(409, '이미 연결된 사용자입니다.');
         if (connectionCount(user.id) >= 100 || connectionCount(invite.user_id) >= 100) fail(409, '연결은 계정당 최대 100명까지 가능합니다.');
         const [a, b] = [user.id, invite.user_id].sort();
         sql('INSERT INTO connections(user_a,user_b,created_at) VALUES(?,?,?)').run(a, b, now());
         sql('DELETE FROM invites WHERE code_hash=?').run(codeHash);
-        notify(user.id, 'connection_added', '가족 연결 완료', `${user.name}님과 연결되었습니다. 위치 공유는 각자가 직접 켜야 합니다.`, [user.id, invite.user_id]);
+        notify(user.id, 'connection_added', '가족 연결 완료', `${user.name}님과 연결되었습니다. 역할별 위치 권한과 위치 공유 동의는 별개입니다.`, [user.id, invite.user_id]);
       });
       return json(res, 200, { ok: true });
     }
@@ -596,6 +647,7 @@ export function createApp({ dataDir = './data', now = Date.now, trustProxy = pro
     if (method === 'POST' && path === '/api/locations') {
       fields(body, ['latitude', 'longitude', 'accuracy', 'recordedAt']);
       rate(`location:${user.id}`, 60, MINUTE);
+      if (user.role !== 'protected') fail(403, '피보호자 역할만 위치를 전송할 수 있습니다.');
       if (!user.sharing) fail(403, '위치 공유가 꺼져 있습니다.');
       const fix = { ...point(body), accuracy: number(body.accuracy, '위치 정확도', 0, 10_000) };
       const recordedAt = timestamp(body.recordedAt, '위치 기록');
@@ -627,14 +679,15 @@ export function createApp({ dataDir = './data', now = Date.now, trustProxy = pro
       return json(res, 200, { ok: true });
     }
     if (method === 'GET' && (match = /^\/api\/locations\/([^/]+)$/u.exec(path))) {
-      const target = sql('SELECT id,sharing FROM users WHERE id=?').get(match[1]);
-      if (!target || (target.id !== user.id && (!target.sharing || !connected(user.id, target.id)))) fail(404, '조회할 수 있는 위치 기록이 없습니다.');
+      const target = sql('SELECT id,role,sharing FROM users WHERE id=?').get(match[1]);
+      if (!target || !canViewLocation(user, target) || (target.id !== user.id && !target.sharing)) fail(404, '조회할 수 있는 위치 기록이 없습니다.');
       const since = url.searchParams.has('since') ? timestamp(url.searchParams.get('since'), '조회 시작') : now() - RETENTION;
       const rows = sql('SELECT latitude,longitude,accuracy,recorded_at FROM locations WHERE user_id=? AND recorded_at>=? ORDER BY recorded_at DESC LIMIT 2000').all(target.id, Math.max(since, now() - RETENTION));
       return json(res, 200, { locations: rows.reverse().map(locationView) });
     }
     if (method === 'POST' && path === '/api/zones') {
       fields(body, ['name', 'latitude', 'longitude', 'radius']);
+      if (user.role !== 'protected') fail(403, '피보호자 역할만 안심구역을 등록할 수 있습니다.');
       const name = text(body.name, '안심구역 이름', 1, 100);
       const center = point(body);
       const radius = number(body.radius, '반경', 50, 5000);
@@ -652,6 +705,7 @@ export function createApp({ dataDir = './data', now = Date.now, trustProxy = pro
     }
     if (method === 'POST' && path === '/api/journeys') {
       fields(body, ['destination', 'latitude', 'longitude', 'radius', 'deadline']);
+      if (user.role !== 'protected') fail(403, '피보호자 역할만 안심귀가를 시작할 수 있습니다.');
       if (!user.sharing) fail(403, '안심귀가를 시작하려면 직접 위치 공유를 켜 주세요.');
       rate(`journey:${user.id}`, 20, 60 * MINUTE);
       const destination = text(body.destination, '목적지 이름', 1, 100);
@@ -698,7 +752,7 @@ export function createApp({ dataDir = './data', now = Date.now, trustProxy = pro
       fields(body, []);
       transaction(() => {
         const sos = getSos(match[1]);
-        if (!sos || sos.user_id === user.id || !connected(user.id, sos.user_id)) fail(404, '확인할 수 있는 도움 요청이 없습니다.');
+        if (!sos || sos.user_id === user.id || !canAccessSos(user, sos)) fail(404, '확인할 수 있는 도움 요청이 없습니다.');
         if (sql('SELECT 1 FROM acknowledgements WHERE sos_id=? AND user_id=?').get(sos.id, user.id)) return;
         if (sos.status !== 'active') fail(409, '이미 종료된 도움 요청입니다.');
         sql('INSERT INTO acknowledgements(sos_id,user_id,created_at) VALUES(?,?,?)').run(sos.id, user.id, now());
@@ -737,7 +791,7 @@ export function createApp({ dataDir = './data', now = Date.now, trustProxy = pro
       return json(res, 201, { media: { id, mime: body.mime } });
     }
     if (method === 'GET' && (match = /^\/api\/media\/([^/]+)$/u.exec(path))) {
-      const item = sql('SELECT m.*,s.user_id FROM media m JOIN sos s ON s.id=m.sos_id WHERE m.id=?').get(match[1]);
+      const item = sql('SELECT m.*,s.user_id,u.role AS user_role FROM media m JOIN sos s ON s.id=m.sos_id JOIN users u ON u.id=s.user_id WHERE m.id=?').get(match[1]);
       if (!canAccessSos(user, item)) fail(404, '첨부 파일을 조회할 권한이 없습니다.');
       const bytes = readFileSync(mediaPath(item.id));
       res.writeHead(200, { 'Content-Type': item.mime, 'Content-Length': bytes.length, 'Content-Disposition': `attachment; filename="${item.id}.${item.mime === 'image/jpeg' ? 'jpg' : 'm4a'}"` });

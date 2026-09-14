@@ -22,6 +22,10 @@ class AlertWorker(context: Context, parameters: WorkerParameters) : CoroutineWor
         return try {
             val state = ApiClient(store).request("GET", "/api/state")
             val me = state.optJSONObject("me") ?: throw ApiException(0, "서버 응답을 읽지 못했습니다.")
+            if (me.optString("role") != "guardian") {
+                store.monitoringEnabled = false
+                return Result.success()
+            }
             if (store.monitoringEnabled && store.token.isNotEmpty() && me.optString("id") == store.userId) {
                 if (!me.optBoolean("sharing") && store.sharingEnabled) {
                     store.sharingEnabled = false

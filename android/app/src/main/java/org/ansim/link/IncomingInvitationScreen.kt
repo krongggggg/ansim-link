@@ -58,17 +58,19 @@ internal fun IncomingInvitationScreen(
             Text(invitation.server, fontWeight = FontWeight.Bold)
             if (loading) LinearProgressIndicator(Modifier.fillMaxWidth())
             preview?.let { value ->
+                val roleName = if (value.role == "guardian") "보호자" else "피보호자"
                 SafetyCard {
                     Text(if (value.isSetup) "가족의 첫 기기 연결" else "${value.inviterName}님의 초대", fontSize = 20.sp, fontWeight = FontWeight.Bold)
+                    Text("초대 역할 · $roleName", color = Violet, fontWeight = FontWeight.Bold)
                     Text("유효 시간: ${whenText(value.expiresAt)}", color = Muted)
                     if (hasSession) {
-                        Text("현재 프로필로 이 가족과 연결하시겠어요?")
-                        InfoStrip("연결만으로 위치 공유가 켜지지는 않습니다. 단, 현재 계정이 이미 위치를 공유 중이면 새 가족도 저장된 위치와 이동 기록을 볼 수 있습니다.", Violet)
+                        Text("현재 프로필의 역할이 $roleName 역할이면 이 가족과 연결할 수 있습니다.")
+                        InfoStrip("역할이 다르면 연결되지 않습니다. 피보호자는 보호자 위치를 볼 수 없고, 보호자는 피보호자가 동의해 공유한 위치만 볼 수 있습니다.", Violet)
                     } else {
-                        Text(if (value.isSetup) "서버 운영자가 발급한 첫 기기용 초대입니다. 연결한 뒤 가족을 초대할 수 있습니다." else "초대한 가족과 연결하고 이 기기에서 사용할 이름을 정합니다.")
+                        Text(if (value.isSetup) "서버 운영자가 발급한 첫 기기용 보호자 초대입니다. 연결한 뒤 역할별로 가족을 초대할 수 있습니다." else "초대한 가족과 연결하고 이 기기에서 사용할 이름을 정합니다.")
                         OutlinedTextField(name, { name = it }, enabled = !busy, label = { Text("가족에게 보일 이름") }, singleLine = true, modifier = Modifier.fillMaxWidth())
-                        Text("아래 버튼을 누르면 이 서버를 신뢰하고 참여하는 데 동의합니다. 서버 운영자가 이름과 가족 연결 정보를 처리합니다.", color = Muted, fontSize = 13.sp)
-                        InfoStrip("위치 공유는 꺼진 상태로 시작하며, 나중에 별도로 동의하고 켤 수 있습니다.", Violet)
+                        Text("아래 버튼을 누르면 이 서버를 신뢰하고 $roleName 역할로 참여하는 데 동의합니다. 서버 운영자가 이름과 가족 연결 정보를 처리합니다.", color = Muted, fontSize = 13.sp)
+                        InfoStrip(if (value.role == "protected") "위치 공유는 꺼진 상태로 시작하며, 연결된 보호자에게 공유하려면 나중에 별도로 동의해야 합니다." else "보호자 위치는 피보호자에게 제공되지 않습니다.", Violet)
                     }
                 }
             }
@@ -79,7 +81,7 @@ internal fun IncomingInvitationScreen(
                 OutlinedButton({ attempt++ }, enabled = !loading && !busy, modifier = Modifier.fillMaxWidth()) { Text("초대 다시 확인") }
             }
             Button({ if (hasSession) connect() else join(name.trim()) }, enabled = preview != null && !expired && !loading && !busy && error == null && (!hasSession || preview?.isSetup == false) && (hasSession || name.trim().isNotEmpty()), modifier = Modifier.fillMaxWidth()) {
-                Text(if (hasSession) "이 가족과 연결하기" else "이 서버에 동의하고 연결하기")
+                Text(if (hasSession) "같은 역할로 가족 연결하기" else "${if (preview?.role == "guardian") "보호자" else "피보호자"} 역할로 연결하기")
             }
             TextButton(cancel, enabled = !busy, modifier = Modifier.fillMaxWidth()) { Text(if (hasSession) "초대 닫기 · 현재 프로필 유지" else "다른 초대 입력하기") }
         }

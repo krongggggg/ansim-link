@@ -66,4 +66,4 @@ internal data class IncomingInvitation(
     }
 }
 
-internal data class InvitationPreview(val inviterName: String?, val isSetup: Boolean, val expiresAt: String)
+internal data class InvitationPreview(val inviterName: String?, val isSetup: Boolean, val role: String, val expiresAt: String)

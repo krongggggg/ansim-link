@@ -104,28 +104,41 @@ class MainActivity : ComponentActivity() {
                             val invitation = pendingInvitation
                             if (!hasSession && invitation == null) {
                                 InvitationLandingScreen(busy, store.baseUrl, ::scanInvitation, ::enterInvitation)
-                            } else if (hasSession && invitation == null) HomeScreen(state, busy, revokePending, SafetyService.running,
-                                onRefresh = { act { refresh() } },
-                                onShare = ::changeSharing,
-                                onMutation = { method, path, body -> act { api.request(method, path, body); refresh() } },
-                                onInvite = { result -> act { result(api.request("POST", "/api/invites", json())); refresh() } },
-                                onScanInvitation = ::scanInvitation,
-                                onAcceptInvite = { code, accepted -> act {
-                                    api.request("POST", "/api/invites/accept", json("code" to code))
-                                    refresh()
-                                    accepted()
-                                    notice("가족과 연결했습니다. 위치 공유는 각자 동의하고 켜 주세요.")
-                                } },
-                                onHistory = { id ->
-                                    try { api.request("GET", "/api/locations/$id").array("locations") }
-                                    catch (e: ApiException) {
-                                        if (e.status == 401 && hasSession) expireSession()
-                                        throw e
+                            } else if (hasSession && invitation == null) {
+                                val loaded = state
+                                when {
+                                    loaded == null -> AccountLoadingScreen(busy) { act { refresh() } }
+                                    loaded.getJSONObject("me").isNull("role") -> RoleSelectionScreen(busy) { role ->
+                                        act {
+                                            api.request("PATCH", "/api/me/role", json("role" to role))
+                                            refresh()
+                                            notice(if (role == "guardian") "보호자 역할로 설정했습니다. 피보호자의 공유 위치만 볼 수 있습니다." else "피보호자 역할로 설정했습니다. 보호자에게 내 위치를 공유할 수 있습니다.")
+                                        }
                                     }
-                                },
-                                onDelete = ::deleteProfile,
-                                monitoring = store.monitoringEnabled, onMonitoring = ::monitor,
-                                serverUrl = store.baseUrl)
+                                    else -> HomeScreen(loaded, busy, revokePending, SafetyService.running,
+                                        onRefresh = { act { refresh() } },
+                                        onShare = ::changeSharing,
+                                        onMutation = { method, path, body -> act { api.request(method, path, body); refresh() } },
+                                        onInvite = { role, result -> act { result(api.request("POST", "/api/invites", json("role" to role))); refresh() } },
+                                        onScanInvitation = ::scanInvitation,
+                                        onAcceptInvite = { code, accepted -> act {
+                                            api.request("POST", "/api/invites/accept", json("code" to code))
+                                            refresh()
+                                            accepted()
+                                            notice("같은 역할의 가족 초대로 연결했습니다.")
+                                        } },
+                                        onHistory = { id ->
+                                            try { api.request("GET", "/api/locations/$id").array("locations") }
+                                            catch (e: ApiException) {
+                                                if (e.status == 401 && hasSession) expireSession()
+                                                throw e
+                                            }
+                                        },
+                                        onDelete = ::deleteProfile,
+                                        monitoring = store.monitoringEnabled, onMonitoring = ::monitor,
+                                        serverUrl = store.baseUrl)
+                                }
+                            }
                             if (invitation != null) key(invitation.id, hasSession) {
                                 IncomingInvitationScreen(invitation, hasSession, busy, invitationError,
                                     load = { loadInvitation(invitation) },
@@ -234,9 +247,11 @@ class MainActivity : ComponentActivity() {
         Instant.parse(expiry)
         val isSetup = result.getBoolean("isSetup")
         val inviterName = if (result.isNull("inviterName")) null else result.getString("inviterName")
+        val role = result.getString("role")
+        require(role == "guardian" || role == "protected") { "초대 역할을 확인하지 못했습니다." }
         require(isSetup || !inviterName.isNullOrBlank()) { "초대한 가족 정보를 확인하지 못했습니다." }
         if (hasSession && isSetup) throw ApiException(409, "첫 기기용 초대는 이미 연결된 프로필에서 사용할 수 없습니다. 가족 연결용 초대를 요청해 주세요.")
-        return InvitationPreview(inviterName, isSetup, expiry)
+        return InvitationPreview(inviterName, isSetup, role, expiry)
     }
 
     private fun acceptInvitation(invitation: IncomingInvitation) {
@@ -293,6 +308,11 @@ class MainActivity : ComponentActivity() {
         revokePending = store.revokePending
         val me = result.getJSONObject("me")
         val sharing = me.optBoolean("sharing")
+        val role = if (me.isNull("role")) null else me.optString("role")
+        if (role != "guardian" && store.monitoringEnabled) {
+            store.monitoringEnabled = false
+            AlertWorker.cancel(this)
+        }
         if (!sharing && store.sharingEnabled) {
             store.sharingEnabled = false
             stopService(Intent(this, SafetyService::class.java))
@@ -372,6 +392,46 @@ class MainActivity : ComponentActivity() {
     }
 }
 
+@Composable private fun AccountLoadingScreen(busy: Boolean, refresh: () -> Unit) {
+    Column(Modifier.fillMaxSize().padding(24.dp), verticalArrangement = Arrangement.Center, horizontalAlignment = Alignment.CenterHorizontally) {
+        CircularProgressIndicator()
+        Spacer(Modifier.height(18.dp))
+        Text("프로필과 역할을 확인하고 있어요", color = Ink, fontWeight = FontWeight.Bold)
+        TextButton(refresh, enabled = !busy) { Text("다시 불러오기") }
+    }
+}
+
+@Composable private fun RoleSelectionScreen(busy: Boolean, select: (String) -> Unit) {
+    var pending by rememberSaveable { mutableStateOf<String?>(null) }
+    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(24.dp), verticalArrangement = Arrangement.spacedBy(18.dp)) {
+        Spacer(Modifier.height(20.dp))
+        Icon(Icons.Rounded.AdminPanelSettings, null, tint = Violet, modifier = Modifier.size(52.dp))
+        Text("이 기기의 역할을 선택하세요", fontSize = 28.sp, lineHeight = 37.sp, fontWeight = FontWeight.Bold, color = Ink)
+        Text("기존 프로필은 업데이트 후 한 번만 역할을 정합니다. 역할은 위치 접근 권한을 결정하며 앱에서 다시 바꿀 수 없습니다.", color = Muted, lineHeight = 23.sp)
+        SafetyCard {
+            Text("피보호자", fontSize = 20.sp, fontWeight = FontWeight.Bold)
+            Text("내가 직접 동의하면 연결된 보호자에게 현재 위치와 최근 이동 기록을 공유합니다. 보호자 위치는 볼 수 없습니다.", color = Muted, lineHeight = 22.sp)
+            Button({ pending = "protected" }, enabled = !busy, modifier = Modifier.fillMaxWidth()) { Text("피보호자로 선택") }
+        }
+        SafetyCard {
+            Text("보호자", fontSize = 20.sp, fontWeight = FontWeight.Bold)
+            Text("연결된 피보호자가 동의해 공유한 위치와 이동 기록을 확인합니다. 보호자의 위치는 가족에게 제공하지 않습니다.", color = Muted, lineHeight = 22.sp)
+            OutlinedButton({ pending = "guardian" }, enabled = !busy, modifier = Modifier.fillMaxWidth()) { Text("보호자로 선택") }
+        }
+        InfoStrip("역할을 잘못 선택하면 앱에서 변경할 수 없습니다. 프로필을 새로 만들려면 현재 프로필 삭제와 새 역할용 초대가 필요합니다.", Danger)
+    }
+    pending?.let { role ->
+        val name = if (role == "guardian") "보호자" else "피보호자"
+        AlertDialog(
+            onDismissRequest = { pending = null },
+            title = { Text("$name 역할로 확정할까요?") },
+            text = { Text("이 선택은 위치 접근 권한에 적용되며 앱에서 변경할 수 없습니다.") },
+            confirmButton = { TextButton({ pending = null; select(role) }, enabled = !busy) { Text("역할 확정") } },
+            dismissButton = { TextButton({ pending = null }, enabled = !busy) { Text("다시 확인") } },
+        )
+    }
+}
+
 @Composable private fun InvitationLandingScreen(busy: Boolean, initialUrl: String, scan: () -> Unit, submit: (String, String, String) -> Unit) {
     var link by rememberSaveable { mutableStateOf("") }
     var manual by rememberSaveable { mutableStateOf(false) }
@@ -415,6 +475,15 @@ class MainActivity : ComponentActivity() {
 
 
 @Composable internal fun SafetyScreen(state: JSONObject?, busy: Boolean, pickPlace: (Boolean) -> Unit, mutate: (String, String, JSONObject?) -> Unit) {
+    if (state?.optJSONObject("me")?.optString("role") == "guardian") {
+        SafetyCard {
+            Icon(Icons.Rounded.AdminPanelSettings, null, tint = Violet)
+            Text("보호자 역할", fontSize = 20.sp, fontWeight = FontWeight.Bold)
+            Text("안심존과 안심귀가는 위치를 공유하는 피보호자가 자신의 기기에서 관리합니다.", color = Muted, lineHeight = 22.sp)
+            InfoStrip("이 보호자 기기의 위치와 이동 기록은 피보호자에게 제공되지 않습니다.", Violet)
+        }
+        return
+    }
     var deletingZone by remember { mutableStateOf<JSONObject?>(null) }
     SafetyCard {
         Icon(Icons.Rounded.Radar, null, tint = Violet)
@@ -565,7 +634,13 @@ internal fun PlacePickerScreen(
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
             Text(member.optString("name"), fontWeight = FontWeight.Bold)
             val location = member.optJSONObject("location")
-            Text(if (!member.optBoolean("sharing")) "위치 공유 꺼짐" else if (location == null) "첫 위치 수신 대기" else "마지막 수신 ${whenText(location.optString("recordedAt"))}", color = Muted, fontSize = 12.sp)
+            val roleName = if (member.optString("role") == "guardian") "보호자" else "피보호자"
+            Text(when {
+                !member.optBoolean("canViewLocation") -> "$roleName · 역할상 위치 비공개"
+                !member.optBoolean("sharing") -> "$roleName · 위치 공유 꺼짐"
+                location == null -> "$roleName · 첫 위치 수신 대기"
+                else -> "$roleName · 마지막 수신 ${whenText(location.optString("recordedAt"))}"
+            }, color = Muted, fontSize = 12.sp)
         }
         Icon(if (member.optJSONObject("location") != null) Icons.Rounded.LocationOn else Icons.Rounded.LocationOff, null, tint = if (member.optJSONObject("location") != null) Mint else Muted, modifier = Modifier.size(20.dp))
     }

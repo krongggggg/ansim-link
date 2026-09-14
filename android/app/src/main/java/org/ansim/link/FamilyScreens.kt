@@ -71,7 +71,7 @@ private enum class FamilyPage { Landing, Invite, Join }
 internal fun FamilyScreen(
     state: JSONObject?,
     busy: Boolean,
-    onInvite: ((JSONObject) -> Unit) -> Unit,
+    onInvite: (String, (JSONObject) -> Unit) -> Unit,
     acceptInvite: (String, () -> Unit) -> Unit,
     scanInvitation: () -> Unit,
     mutate: (String, String, JSONObject?) -> Unit,
@@ -89,6 +89,7 @@ internal fun FamilyScreen(
     var invitationExpiry by rememberSaveable(ownerId) { mutableStateOf("") }
     var invitationUrl by rememberSaveable(ownerId) { mutableStateOf("") }
     var invitationApkAvailable by rememberSaveable(ownerId) { mutableStateOf(false) }
+    var invitationRole by rememberSaveable(ownerId) { mutableStateOf("protected") }
     var disconnectId by rememberSaveable(ownerId) { mutableStateOf<String?>(null) }
     val members = state?.array("members").orEmpty()
     val disconnectMember = members.firstOrNull { it.optString("id") == disconnectId }
@@ -117,11 +118,11 @@ internal fun FamilyScreen(
                 item {
                     Text("함께할 가족을 연결해요", fontSize = 24.sp, fontWeight = FontWeight.Bold, color = Ink)
                     Spacer(Modifier.height(8.dp))
-                    Text("가족 연결과 위치 공유는 별개예요. 서로 연결한 뒤에도 위치 공유는 각자 동의하고 켜야 합니다.", color = Muted, lineHeight = 22.sp)
+                    Text("보호자는 연결된 피보호자의 동의한 위치만 볼 수 있고, 피보호자는 보호자 위치를 볼 수 없습니다.", color = Muted, lineHeight = 22.sp)
                 }
                 item {
                     FamilyEntry(
-                        "가족 초대하기", "QR로 설치부터 가족 연결까지 이어져요", Icons.Rounded.QrCode2,
+                        "역할별 가족 초대하기", "보호자·피보호자 역할을 지정해 QR을 만들어요", Icons.Rounded.QrCode2,
                         enabled = state != null,
                     ) { page = FamilyPage.Invite }
                 }
@@ -144,13 +145,13 @@ internal fun FamilyScreen(
                         Box(
                             Modifier.fillMaxWidth().heightIn(min = 48.dp).clickable(
                                 role = Role.Button,
-                                onClickLabel = "${name}님의 지도 보기",
+                                onClickLabel = "${name}님의 역할과 위치 권한 보기",
                                 onClick = { onMember(memberId) },
                             ),
                             contentAlignment = Alignment.CenterStart,
                         ) { MemberRow(member) }
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                            TextButton({ onMember(memberId) }, modifier = Modifier.weight(1f).heightIn(min = 48.dp)) { Text("지도에서 보기") }
+                            TextButton({ onMember(memberId) }, modifier = Modifier.weight(1f).heightIn(min = 48.dp)) { Text("지도·권한 보기") }
                             TextButton(
                                 { disconnectId = memberId }, enabled = !busy,
                                 modifier = Modifier.weight(1f).heightIn(min = 48.dp),
@@ -163,14 +164,16 @@ internal fun FamilyScreen(
                 code = invitationCode,
                 expiresAt = invitationExpiry,
                 inviteUrl = invitationUrl,
+                role = invitationRole,
                 apkAvailable = invitationApkAvailable,
                 busy = busy,
                 enabled = state != null,
-                create = {
-                    onInvite { invitation ->
+                create = { role ->
+                    onInvite(role) { invitation ->
                         invitationCode = invitation.optString("code")
                         invitationExpiry = invitation.optString("expiresAt")
                         invitationUrl = if (invitation.isNull("inviteUrl")) "" else invitation.getString("inviteUrl")
+                        invitationRole = invitation.optString("role", role)
                         invitationApkAvailable = invitation.optBoolean("apkAvailable")
                     }
                 },
@@ -211,7 +214,7 @@ internal fun FamilyScreen(
                         keyboardActions = KeyboardActions(onDone = { focusManager.clearFocus() }),
                         modifier = Modifier.fillMaxWidth(),
                     )
-                    Text("연결하면 서로 가족 목록에 표시됩니다. 위치와 이동 기록은 각자 위치 공유에 동의한 경우에만 볼 수 있어요.", color = Muted, lineHeight = 22.sp)
+                    Text("연결하면 서로 가족 목록에 표시됩니다. 역할이 맞아야 초대를 사용할 수 있으며, 피보호자는 보호자 위치와 이동 기록을 볼 수 없습니다.", color = Muted, lineHeight = 22.sp)
                     Button(
                         onClick = {
                             focusManager.clearFocus()
@@ -234,7 +237,7 @@ internal fun FamilyScreen(
             title = { Text("가족 연결을 해제할까요?") },
             text = {
                 Text(
-                    "${name}님과 서로의 위치와 이동 기록을 더 이상 볼 수 없습니다. 다시 연결하려면 새 초대 코드가 필요해요.",
+                    "${name}님과의 가족 연결을 해제합니다. 역할별 위치·이동 기록 접근도 끝납니다. 다시 연결하려면 같은 역할용 새 초대가 필요해요.",
                     modifier = Modifier.verticalScroll(rememberScrollState()),
                 )
             },
@@ -296,12 +299,23 @@ private fun InvitationQr(url: String) {
 }
 
 @Composable
-private fun InviteFlow(code: String, expiresAt: String, inviteUrl: String, apkAvailable: Boolean, busy: Boolean, enabled: Boolean, create: () -> Unit, modifier: Modifier) {
+private fun InviteFlow(
+    code: String,
+    expiresAt: String,
+    inviteUrl: String,
+    role: String,
+    apkAvailable: Boolean,
+    busy: Boolean,
+    enabled: Boolean,
+    create: (String) -> Unit,
+    modifier: Modifier,
+) {
     val context = LocalContext.current
     val expiry = remember(expiresAt) { parseTimestamp(expiresAt) }
     var expired by remember(expiresAt) { mutableStateOf(expiry?.isAfter(Instant.now()) != true) }
     var feedback by remember(code) { mutableStateOf<String?>(null) }
     val hasLink = inviteUrl.isNotBlank()
+    val roleName = if (role == "guardian") "보호자" else "피보호자"
     LaunchedEffect(expiry) {
         while (expiry != null && expiry.isAfter(Instant.now())) {
             delay(Duration.between(Instant.now(), expiry).toMillis().coerceIn(1L, 1_000L))
@@ -312,17 +326,24 @@ private fun InviteFlow(code: String, expiresAt: String, inviteUrl: String, apkAv
         modifier.verticalScroll(rememberScrollState()).padding(20.dp),
         verticalArrangement = Arrangement.spacedBy(18.dp),
     ) {
-        Text("QR로 가족을 초대해요", fontSize = 23.sp, fontWeight = FontWeight.Bold, color = Ink)
-        Text("가족 폰에 앱이 있으면 어딧의 ‘초대 QR 스캔’으로 바로 초대를 확인할 수 있어요. 앱이 없으면 기본 카메라로 설치 안내를 여세요.", color = Muted, lineHeight = 23.sp)
+        Text("역할을 정해 가족을 초대해요", fontSize = 23.sp, fontWeight = FontWeight.Bold, color = Ink)
+        Text("초대받는 기기의 역할이 고정됩니다. 보호자는 피보호자의 공유 위치를 확인하고, 피보호자는 보호자 위치를 볼 수 없습니다.", color = Muted, lineHeight = 23.sp)
         SafetyCard {
             if (code.isBlank()) {
-                Icon(Icons.Rounded.QrCode2, null, tint = Violet, modifier = Modifier.size(36.dp))
-                Text("가족이 준비되면 QR을 만들어 주세요", fontWeight = FontWeight.Bold, fontSize = 18.sp)
-                Text("초대는 10분 동안 한 사람이 사용할 수 있어요. 가족 폰에도 이 서버에 접속할 수 있는 네트워크 연결이 필요합니다.", color = Muted, lineHeight = 22.sp)
+                Icon(Icons.Rounded.AdminPanelSettings, null, tint = Violet, modifier = Modifier.size(36.dp))
+                Text("누구를 초대할까요?", fontWeight = FontWeight.Bold, fontSize = 18.sp)
+                Button({ create("protected") }, enabled = enabled && !busy, modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp)) {
+                    Text("피보호자 초대 QR 만들기")
+                }
+                OutlinedButton({ create("guardian") }, enabled = enabled && !busy, modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp)) {
+                    Text("보호자 초대 QR 만들기")
+                }
+                Text("초대는 10분 동안 한 사람이 사용할 수 있습니다. 역할이 다른 기존 프로필은 이 초대를 사용할 수 없습니다.", color = Muted, fontSize = 12.sp, lineHeight = 19.sp)
             } else {
                 if (expired) {
-                    InfoStrip("초대가 만료되었어요. 아래에서 새 QR을 만들어 주세요.", Danger)
+                    InfoStrip("초대가 만료되었어요. 아래에서 역할을 정해 새 QR을 만들어 주세요.", Danger)
                 } else {
+                    InfoStrip("이 QR은 $roleName 역할용입니다.", Violet)
                     if (hasLink) {
                         Text("이 QR을 가족 폰으로 비춰 주세요", fontWeight = FontWeight.Bold, fontSize = 18.sp)
                         InvitationQr(inviteUrl)
@@ -340,7 +361,7 @@ private fun InviteFlow(code: String, expiresAt: String, inviteUrl: String, apkAv
                         onClick = {
                             if (expiry?.isAfter(Instant.now()) == true) {
                                 val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                                clipboard.setPrimaryClip(ClipData.newPlainText(if (hasLink) "가족 초대 링크" else "가족 초대 코드", if (hasLink) inviteUrl else code))
+                                clipboard.setPrimaryClip(ClipData.newPlainText(if (hasLink) "$roleName 초대 링크" else "$roleName 초대 코드", if (hasLink) inviteUrl else code))
                                 feedback = if (hasLink) "초대 링크를 복사했어요." else "초대 코드를 복사했어요."
                             } else expired = true
                         },
@@ -353,12 +374,13 @@ private fun InviteFlow(code: String, expiresAt: String, inviteUrl: String, apkAv
                     OutlinedButton(
                         onClick = {
                             if (expiry?.isAfter(Instant.now()) == true) {
+                                val permission = if (role == "guardian") "연결된 피보호자의 공유 위치만 확인할 수 있습니다." else "보호자 위치는 볼 수 없으며 내 위치 공유는 별도 동의가 필요합니다."
                                 val share = Intent(Intent.ACTION_SEND).apply {
                                     type = "text/plain"
-                                    putExtra(Intent.EXTRA_TEXT, if (hasLink) "어딧 가족 초대입니다.\n$inviteUrl\n만료: ${whenText(expiresAt)} (한 사람만 사용 가능)\n앱이 있으면 어딧의 ‘초대 QR 스캔’으로 링크의 QR을 비추거나 이 링크를 여세요. 앱이 없으면 설치 후 같은 QR을 다시 스캔할 수 있습니다. Tailscale 주소라면 가족 폰도 Tailscale 연결이 필요합니다. 위치 공유는 자동으로 켜지지 않습니다."
-                                        else "어딧 초대 코드: $code\n만료: ${whenText(expiresAt)} (한 사람만 사용 가능)\n초대한 가족의 서버 주소와 함께 입력해 주세요. 이미 같은 서버에 연결된 기기는 ‘받은 초대로 연결하기’를 이용해 주세요.")
+                                    putExtra(Intent.EXTRA_TEXT, if (hasLink) "어딧 $roleName 역할 초대입니다.\n$inviteUrl\n만료: ${whenText(expiresAt)} (한 사람만 사용 가능)\n$permission\n앱이 있으면 어딧의 ‘초대 QR 스캔’으로 링크의 QR을 비추거나 이 링크를 여세요. 앱이 없으면 설치 후 같은 QR을 다시 스캔할 수 있습니다."
+                                        else "어딧 $roleName 역할 초대 코드: $code\n만료: ${whenText(expiresAt)} (한 사람만 사용 가능)\n$permission\n초대한 가족의 서버 주소와 함께 입력해 주세요.")
                                 }
-                                try { context.startActivity(Intent.createChooser(share, "가족 초대 전달")) }
+                                try { context.startActivity(Intent.createChooser(share, "$roleName 초대 전달")) }
                                 catch (_: ActivityNotFoundException) { feedback = "공유할 앱이 없어요. 초대 링크나 코드를 복사해 주세요." }
                                 catch (_: SecurityException) { feedback = "공유 화면을 열 수 없어요. 초대 링크나 코드를 복사해 주세요." }
                             } else expired = true
@@ -372,17 +394,22 @@ private fun InviteFlow(code: String, expiresAt: String, inviteUrl: String, apkAv
                     Text("앱에서 직접 입력할 코드", color = Muted, fontSize = 12.sp)
                     SelectionContainer { Text(code, color = Violet, fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold, fontSize = 18.sp) }
                 }
+                feedback?.let { Text(it, color = Muted, modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite }) }
+                Button(
+                    onClick = { feedback = null; create(role) },
+                    enabled = enabled && !busy,
+                    modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp),
+                    shape = RoundedCornerShape(14.dp),
+                ) { Text(if (busy) "처리 중…" else "새 $roleName 초대 QR 만들기") }
+                OutlinedButton(
+                    onClick = { feedback = null; create(if (role == "guardian") "protected" else "guardian") },
+                    enabled = enabled && !busy,
+                    modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp),
+                ) { Text("다른 역할 초대 QR 만들기") }
+                Text("새 QR을 만들면 이전 초대는 더 이상 사용할 수 없어요.", color = Muted, fontSize = 12.sp, lineHeight = 19.sp)
             }
-            feedback?.let { Text(it, color = Muted, modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite }) }
-            Button(
-                onClick = { feedback = null; create() },
-                enabled = enabled && !busy,
-                modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp),
-                shape = RoundedCornerShape(14.dp),
-            ) { Text(if (busy) "처리 중…" else if (code.isBlank()) "초대 QR 만들기" else "새 초대 QR 만들기") }
-            if (code.isNotBlank()) Text("새 QR을 만들면 이전 초대는 더 이상 사용할 수 없어요.", color = Muted, fontSize = 12.sp, lineHeight = 19.sp)
         }
-        InfoStrip("가족 연결만으로 위치 공유가 켜지지는 않습니다. 이미 공유 중인 계정의 위치와 기록은 새 가족에게도 보일 수 있어요. 메시지는 직접 전달해야 합니다.", Violet)
+        InfoStrip("역할과 위치 공유 동의는 별개입니다. 보호자 위치와 이동 기록은 피보호자 응답에서 항상 숨깁니다.", Violet)
     }
 }
 

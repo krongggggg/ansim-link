@@ -28,6 +28,7 @@ private enum class SettingsDetail { Guardian, Inactivity, Data, Reinstall, App, 
 @Composable
 internal fun SettingsScreen(me: JSONObject?, busy: Boolean, monitoring: Boolean, monitor: (Boolean) -> Unit, mutate: (String, String, JSONObject?) -> Unit, delete: (String) -> Unit, server: String) {
     val currentName = me?.optString("name").orEmpty()
+    val guardianRole = me?.optString("role") == "guardian"
     val currentMinutes = me?.optInt("inactivityMinutes", 720)
     val canMutate = !busy && me != null
     var detail by rememberSaveable(me?.optString("id")) { mutableStateOf<SettingsDetail?>(null) }
@@ -46,36 +47,39 @@ internal fun SettingsScreen(me: JSONObject?, busy: Boolean, monitoring: Boolean,
             Icon(Icons.Rounded.Person, null, tint = Violet, modifier = Modifier.size(32.dp))
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 Text(currentName.ifBlank { "내 프로필" }, color = Ink, fontSize = 19.sp, fontWeight = FontWeight.Bold)
-                Text(if (me == null) "프로필을 불러오는 중" else "이 기기에 연결된 프로필", color = Muted, fontSize = 12.sp)
+                Text(if (me == null) "프로필을 불러오는 중" else if (guardianRole) "보호자 역할 · 앱에서 변경 불가" else "피보호자 역할 · 앱에서 변경 불가", color = Muted, fontSize = 12.sp)
             }
         }
     }
 
     SafetyCard {
-        SettingsSectionTitle("알림")
-        Row(
-            Modifier.fillMaxWidth().heightIn(min = 56.dp)
-                .toggleable(value = monitoring, enabled = canMutate, role = Role.Switch, onValueChange = monitor),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(12.dp)
-        ) {
-            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                Text("백그라운드 보호자 알림", color = Ink, fontWeight = FontWeight.SemiBold)
-                Text("내 위치 공유 없이 · 15분 이상 간격", color = Muted, fontSize = 12.sp, lineHeight = 18.sp)
+        SettingsSectionTitle(if (guardianRole) "보호자 알림" else "피보호자 안전 설정")
+        if (guardianRole) {
+            Row(
+                Modifier.fillMaxWidth().heightIn(min = 56.dp)
+                    .toggleable(value = monitoring, enabled = canMutate, role = Role.Switch, onValueChange = monitor),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text("백그라운드 보호자 알림", color = Ink, fontWeight = FontWeight.SemiBold)
+                    Text("피보호자 위치를 수집하지 않고 · 15분 이상 간격", color = Muted, fontSize = 12.sp, lineHeight = 18.sp)
+                }
+                Switch(checked = monitoring, onCheckedChange = null, enabled = canMutate)
             }
-            Switch(checked = monitoring, onCheckedChange = null, enabled = canMutate)
-        }
-        SettingsRow(Icons.Rounded.Info, "알림 작동 방식", "위치 수집 중에는 이 스위치와 별도로 확인") { detail = SettingsDetail.Guardian }
-        HorizontalDivider(color = Muted.copy(alpha = 0.12f))
-        SettingsRow(Icons.Rounded.Schedule, "움직임 없음 알림", currentMinutes?.let { "현재 ${inactivityLabel(it)}" } ?: "프로필을 불러오는 중", enabled = canMutate) {
-            minutesInput = currentMinutes?.toString().orEmpty()
-            detail = SettingsDetail.Inactivity
+            SettingsRow(Icons.Rounded.Info, "알림 작동 방식", "피보호자 소식만 역할 권한에 따라 확인") { detail = SettingsDetail.Guardian }
+        } else {
+            InfoStrip("보호자 위치와 이동 기록은 이 피보호자 프로필에 제공되지 않습니다.", Violet)
+            SettingsRow(Icons.Rounded.Schedule, "움직임 없음 알림", currentMinutes?.let { "현재 ${inactivityLabel(it)}" } ?: "프로필을 불러오는 중", enabled = canMutate) {
+                minutesInput = currentMinutes?.toString().orEmpty()
+                detail = SettingsDetail.Inactivity
+            }
         }
     }
 
     SafetyCard {
         SettingsSectionTitle("데이터 관리")
-        SettingsRow(Icons.Rounded.PrivacyTip, "보관과 삭제", "위치 기록 7일 · 공유를 끄면 위치 기록 삭제") { detail = SettingsDetail.Data }
+        SettingsRow(Icons.Rounded.PrivacyTip, "보관과 삭제", if (guardianRole) "보호자 위치 저장 안 함 · 역할별 접근 제어" else "위치 기록 7일 · 공유를 끄면 위치 기록 삭제") { detail = SettingsDetail.Data }
         HorizontalDivider(color = Muted.copy(alpha = 0.12f))
         SettingsRow(Icons.Rounded.PhonelinkErase, "업데이트·재설치 안내", "업데이트는 유지 · 삭제하면 새 초대 필요") { detail = SettingsDetail.Reinstall }
     }
@@ -104,8 +108,8 @@ internal fun SettingsScreen(me: JSONObject?, busy: Boolean, monitoring: Boolean,
 
     when (detail) {
         SettingsDetail.Guardian -> SettingsInfoDialog("알림 작동 방식", { detail = null }) {
-            SettingsParagraph("백그라운드 보호자 알림", "내 위치를 공유하지 않아도 가족 소식을 확인합니다. Android 예약 작업으로 15분 이상 간격으로 확인하며, 정확히 15분마다 실행되는 것은 아닙니다.")
-            SettingsParagraph("전체 알림을 끄는 스위치가 아니에요", "위치 수집이 실행되는 동안에는 이 스위치와 관계없이 약 15초마다 가족 소식을 확인합니다. 앱이 열려 있는 동안에도 약 15초마다 갱신됩니다.")
+            SettingsParagraph("백그라운드 보호자 알림", "역할 권한이 있는 피보호자의 소식만 Android 예약 작업으로 15분 이상 간격으로 확인합니다. 이 보호자 기기의 위치는 수집하지 않습니다.")
+            SettingsParagraph("전체 알림을 끄는 스위치가 아니에요", "앱이 열려 있는 동안에는 약 15초마다 역할 권한이 있는 가족 소식을 새로고침합니다.")
             SettingsParagraph("지연되거나 전달되지 않을 수 있어요", "강제 종료, 배터리 절약, 통신 장애, Android 알림 권한 설정에 영향을 받습니다. 긴급 구조기관에 신고하지 않으며, 위급할 때는 112·119에 직접 연락하세요.")
         }
         SettingsDetail.Inactivity -> {
@@ -145,7 +149,7 @@ internal fun SettingsScreen(me: JSONObject?, busy: Boolean, monitoring: Boolean,
             )
         }
         SettingsDetail.Data -> SettingsInfoDialog("데이터 보관과 삭제", { detail = null }) {
-            SettingsParagraph("위치 기록", "서버에서 최대 7일 보관합니다. 위치 공유를 끄면 서버에 저장된 내 위치 기록이 삭제됩니다.")
+            SettingsParagraph("위치 기록", if (guardianRole) "보호자 역할의 위치는 가족에게 제공되지 않습니다. 기존 사용자가 보호자를 선택하면 서버의 기존 위치 기록과 진행 중인 안심귀가를 정리합니다." else "서버에서 최대 7일 보관합니다. 위치 공유를 끄면 서버에 저장된 내 위치 기록이 삭제됩니다. 연결된 보호자만 조회할 수 있습니다.")
             SettingsParagraph("이전 버전의 긴급 요청", "이전 버전에서 생성한 긴급 요청(SOS)과 첨부 자료는 요청이 종료될 때까지 유지되며, 종료 후 7일 보관됩니다. 위치 공유를 끄는 것과는 별개의 보관 기준입니다.")
             SettingsParagraph("프로필 삭제", "내 프로필과 연결된 자료를 서버에서 영구 삭제하고 이 기기의 연결을 종료합니다. 앱만 삭제하면 서버 데이터는 삭제되지 않습니다.")
             SettingsParagraph("서버 백업의 범위", "위 보관·삭제 기준은 운영 중인 서버 데이터에 적용됩니다. 운영자가 별도로 만든 백업 사본은 앱에서 삭제하지 않습니다. 백업에 포함되는 자료, 보관 기간과 삭제 방법은 서버 운영자에게 확인해 주세요.")
